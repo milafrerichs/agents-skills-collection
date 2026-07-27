@@ -12,8 +12,20 @@ toolchain installed. Two consequences for a skill ported from `night-shift`:
   vanishes with the sandbox and confuses `complete_execution`'s `worktree_path`.
   Branch in place instead.
 - **No cross-repo queue.** If the ticket turns out to belong to a different
-  repository than the one checked out, that is a `skip_execution` with the reason
-  stated — not something to work around by cloning.
+  repository than the one checked out, do not work around it by cloning — but do
+  not call `skip_execution` on your own either. Ask:
+
+  ```
+  TECH-123 looks like it belongs to <other-repo>, but this sandbox has
+  <checked-out-repo>.
+
+  1. skip_execution with the reason — this ticket needs a session on that repo
+  2. The work genuinely lands in <checked-out-repo>; record it here and continue
+  3. Stop so the right repo can be added to this session (add_repo)
+  ```
+
+  Option 3 often resolves it without losing the run: a repo the session can
+  reach can be added mid-session, and a fresh sandbox is not always needed.
 
 Verify the repo matches the ticket before planning:
 
@@ -70,9 +82,23 @@ handoff that the branch exists only in a sandbox that will be reclaimed.
 
 Sandboxes restrict outbound network to an allowlist. Package installs from npm,
 PyPI, and crates.io generally work; arbitrary hosts do not. If a test suite needs
-a service that is unreachable — a live database, a third-party API — that is a
-`block_execution`, not something to stub around, since stubbing changes what the
-tests actually prove.
+a service that is unreachable — a live database, a third-party API — name what is
+unreachable and what it would have covered, then ask:
+
+```
+The suite needs <service>, which is not reachable from this sandbox.
+Affected: <which tests / which FR-NFR ids they cover>
+
+1. block_execution — the run cannot prove these requirements
+2. Run the reachable subset; the affected requirements go to the handoff as
+   unverified
+3. Stub <service> — the tests will pass, but they stop proving what they claim
+```
+
+Do not slide into option 3 by default. Stubbing changes what the tests actually
+prove, which is exactly the thing the reviewer is trusting; it is a tradeoff the
+user takes knowingly or not at all. If they take it, the stub and its limitation
+go into `store_review_report`'s `selfReview`, not just into a commit message.
 
 Check what a suite needs before committing to it:
 

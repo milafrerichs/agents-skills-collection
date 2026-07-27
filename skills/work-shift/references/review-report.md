@@ -205,6 +205,12 @@ Support `prefers-color-scheme`.
 <h2>Plan Review</h2>
 <p><strong>GO.</strong> Key findings: …</p>
 
+<!-- If the verdict was NO-GO and the user chose to proceed anyway, say so here
+     rather than reporting the run as cleanly reviewed: -->
+<h2>Plan Review</h2>
+<p><strong>NO-GO ×2 — overridden.</strong> The reviewer's blocking findings were
+   …; the run proceeded on the user's call with those accepted as known risk.</p>
+
 <h2>Changes</h2>
 <table>
   <tr><th>File</th><th>What changed</th><th>Why</th></tr>

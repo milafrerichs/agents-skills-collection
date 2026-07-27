@@ -14,7 +14,7 @@ Follow the skill at `.claude/skills/work-shift/SKILL.md` exactly:
 2. `create_execution` for $1 and keep the execution_id (Step 1).
 3. `get_issue_spec`, treat the FR/NFR arrays as the contract, and confirm scope
    with me before building (Step 2).
-4. Plan → `store_artifact` → Opus plan review → GO/NO-GO (Step 3).
+4. Plan → `store_artifact` → Fable plan review → GO/NO-GO (Step 3).
 5. Branch, TDD, verify against every requirement (Steps 4–6).
 6. Clean Code + Sandi Metz review, then `store_review_report` (Step 7 — read
    the skill's `references/review-report.md` first).
