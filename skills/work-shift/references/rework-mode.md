@@ -50,7 +50,7 @@ name mid-thread orphans their review history.
 If the prior work is genuinely gone, say so in the handoff. The reviewer needs to
 know they are looking at a rebuild rather than an edit.
 
-## Lightweight plan, no Opus review
+## Lightweight plan, no Fable review
 
 The full 8-part plan and the GO/NO-GO review are for greenfield work. Instead
 store a short feedback response mapping each item to the change it triggers:

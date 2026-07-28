@@ -2,7 +2,7 @@
 name: work-shift
 description: >
   Work a single Linear ticket end-to-end inside a Claude Code cloud sandbox —
-  plan, Opus plan review, TDD implementation, verification, code review, critic
+  plan, Fable plan review, TDD implementation, verification, code review, critic
   pass, branch push — and record the whole run into the Night Shift MCP so it
   appears in the dashboard next to overnight work. Use this skill whenever
   someone wants to work one specific ticket rather than the overnight queue:
@@ -34,7 +34,7 @@ differences all follow from *where* this runs and *how the work arrives*:
 | Scope | whole queue, may span repos | exactly one ticket, one repo |
 | Isolation | git worktree per task | branch in the sandbox checkout |
 | Ends with | local worktree, no push | **branch pushed to origin, no PR** |
-| Human | asleep | present at kickoff |
+| Human | asleep | **present throughout — blocked decisions escalate to them** |
 
 `create_execution` exists precisely for this: it records work against a Linear
 ticket — plan, diff, decisions, review — building history without ever entering
@@ -47,6 +47,48 @@ The critic uses a distinct id: `work-shift-critic-YYYYMMDD-NNN`. Keeping these
 separate is what makes the dashboard show a genuine second opinion rather than
 the implementer grading itself.
 
+## Escalate, do not terminate
+
+This is the rule that most distinguishes work-shift from night-shift, and it
+overrides any instinct inherited from that skill: **nothing in this run ends
+itself on the agent's own judgement.** When the run hits something it cannot
+resolve — a dirty tree, a missing spec, a plan the reviewer rejected twice, a
+service it cannot reach — it states the situation, offers the options, and
+waits for an answer.
+
+`block_execution` and `skip_execution` are still the right calls for a run that
+genuinely should not continue. They are outcomes the *user* selects, never the
+agent's unilateral decision. The only thing that stops this skill without
+asking is the user saying so.
+
+night-shift blocks and moves on because the human is asleep; there is nobody to
+ask, and guessing unattended is worse than stopping. Here the person who
+started the run is watching, so ending it to report "this needed a human
+decision" spends an entire run communicating what one question would have
+settled.
+
+Format a decision the way Step 2 formats its kickoff confirmation — what was
+found, then numbered options, each naming its consequence:
+
+```
+<what is blocking, in one or two lines>
+<the specific evidence: status output, findings, affected requirements>
+
+1. <the option that continues the run, and what it costs>
+2. <the option that changes course>
+3. <the terminal option — block_execution / skip_execution / stop>
+```
+
+Use `AskUserQuestion` where the harness offers it. Keep the list short and each
+consequence explicit; a decision the user has to reconstruct from prose costs
+more than the stop it replaced. Always include the terminal option — escalating
+is not the same as arguing them out of stopping.
+
+Record every escalation the user resolves: `add_note` at the time, and — where
+the answer changes what a reviewer should look at — the Step 9 handoff and the
+`summary_html`. A decision nobody can see later is indistinguishable from the
+agent having guessed.
+
 ---
 
 ## Flow
@@ -55,7 +97,7 @@ the implementer grading itself.
 0. RESOLVE   - Ticket ID + repo context + base branch
 1. RECORD    - create_execution → execution_id (claim it if the server wants one)
 2. SPEC      - get_issue_spec → FR/NFR checklist; confirm scope with the user
-3. PLAN      - 8-part plan → store_artifact(plan) → Opus plan review → GO/NO-GO
+3. PLAN      - 8-part plan → store_artifact(plan) → Fable plan review → GO/NO-GO
 4. BRANCH    - work-shift/<slug> off origin/<base>
 5. IMPLEMENT - TDD red → green → refactor
 6. VERIFY    - tests + lint + explicit FR/NFR confirmation
@@ -88,9 +130,21 @@ BASE_BRANCH="${BASE_BRANCH:-main}"
 REPO_LABEL=$(basename -s .git "$(git remote get-url origin)")
 ```
 
-If the working tree is dirty, stop and report it. Sandboxes usually start clean;
+If the working tree is dirty, do not branch yet. Sandboxes usually start clean;
 uncommitted changes mean someone else's work is in flight and a branch cut here
-would silently absorb it.
+would silently absorb it. Show `git status --short` and ask:
+
+```
+Working tree is dirty:
+<git status --short output>
+
+1. Stash the changes and continue on a clean tree
+2. Branch anyway — the uncommitted changes ride along into this run's diff
+3. Stop so I can sort this out first
+```
+
+Which of these is right depends on whose changes those are and whether they
+belong to this ticket — you cannot know that, so do not pick for them.
 
 Read `references/cloud-sandbox.md` for sandbox-specific git, auth, and network
 caveats — especially before the push in Step 8.
@@ -146,9 +200,24 @@ kicked this off, so use them:
 1. Ask up to three sharp questions covering the biggest ambiguities.
 2. If they answer, record the answers via `add_note` and fold them into the plan
    as explicit **Assumptions**.
-3. If they are not available, call `spec_ticket` to open an interactive spec
-   session, then `block_execution(reason: "needs spec")` and stop. Speccing and
-   implementing in the same unattended pass just launders a guess into a commit.
+3. If the questions go unanswered, ask how they want to proceed rather than
+   assuming they have left:
+
+```
+No spec and no acceptance criteria on this ticket, and the scope questions
+above are still open.
+
+1. Open an interactive spec session (spec_ticket) and block this run until
+   the ticket is specced
+2. Proceed on assumptions I state explicitly in the plan and record via
+   add_note — the plan review will be reading a guess, not a spec
+3. Stop here
+```
+
+Option 2 is available because you are attended, but be straight about its cost:
+speccing and implementing in the same pass launders a guess into a commit, and
+that stays true whoever authorises it. If they take it, every assumption goes in
+the plan's **Assumptions** section and into the handoff, not just into `add_note`.
 
 ### Confirm before building
 
@@ -208,9 +277,9 @@ Keep the numbered step labels from item 5 stable — they become the `planCheck`
 rows in Step 7 and are shown verbatim in the dashboard's "plan vs. what it did"
 view.
 
-### Opus plan review
+### Fable plan review
 
-Spawn a subagent (model `claude-opus-4-5`) with the system prompt:
+Spawn a subagent (model `claude-fable-5`) with the system prompt:
 
 > You are a senior engineer doing a pre-implementation plan review. Be critical.
 > Flag vague steps, missing edge cases, incorrect file assumptions, and anything
@@ -221,15 +290,39 @@ risks, or improvements. End with GO / NO-GO and required changes if NO-GO."*
 
 - **GO** → continue to Step 4.
 - **NO-GO** → apply the required changes, re-`store_artifact`, review once more.
-- **NO-GO twice** → `block_execution(reason)` and stop. Two failed reviews means
-  the ticket is not ready, not that the third plan will be better.
+- **NO-GO a second time** → this is a decision, not a dead end. Two NO-GOs mean
+  the plan needs a human call — it does not mean the run is over. Present the
+  reviewer's blocking findings and ask:
+
+```
+Plan review returned NO-GO twice.
+Blocking findings: <the reviewer's required changes>
+
+1. Proceed with the plan as it stands — findings recorded as accepted risk
+2. One more revision round
+3. Narrow scope to the parts the review accepted, rest to Out of scope
+4. block_execution and stop here
+```
+
+Record the verdict either way:
 
 ```
 Night Shift MCP → add_note
   agent_id: "work-shift-YYYYMMDD-NNN"
   execution_id: <execution_id>
-  note: "Opus plan review: <GO|NO-GO>. <key findings>"
+  note: "Fable plan review: <GO | NO-GO | NO-GO ×2, user chose to proceed>.
+         <key findings>"
 ```
+
+A NO-GO the user chose to override is not a failure to bury. Beyond that
+`add_note` it goes in two more places, so the dashboard reviewer knows they are
+reading an overridden plan rather than an approved one: the **Open items**
+section of the Step 9 handoff, naming the overridden findings, and the **Plan
+Review** section of `summary_html` (Step 8), in the form shown in
+`references/review-report.md`.
+
+If they picked option 3, re-`store_artifact` the narrowed plan first — the
+`planCheck` rows in Step 7 are matched against the plan you actually built from.
 
 ## Step 4 — Branch
 
@@ -370,7 +463,7 @@ If the push fails on credentials or network, do not treat the run as lost:
 ### Critic pass
 
 `store_review_report` was your own self-assessment. Now get an adversarial second
-opinion. Spawn a subagent (model `claude-opus-4-5`):
+opinion. Spawn a subagent (model `claude-fable-5`):
 
 > You are a senior engineer doing an adversarial post-implementation review. You
 > did NOT write this code. Find real defects: correctness bugs, missing edge
@@ -432,10 +525,17 @@ Linear: moved to In Review
 
 Open items:
   - <anything unmet, unpushed, or worth a second look>
+  - <every escalation the user resolved mid-run: an overridden plan review
+     NO-GO, assumptions accepted in place of a spec, a dirty tree carried in,
+     tests skipped for an unreachable service>
 
 Next: review in the NightShift dashboard, then open the PR from
       work-shift/add-user-search-endpoint when satisfied.
 ```
+
+The escalation lines matter more than the green ones. A reviewer who knows the
+plan review was overridden reads the diff differently than one who assumes it
+passed.
 
 ---
 
@@ -444,21 +544,28 @@ Next: review in the NightShift dashboard, then open the PR from
 | Situation | MCP action | Local action |
 |---|---|---|
 | No ticket ID given | — | Ask; do not guess |
-| Dirty working tree at start | — | Stop and report |
+| Dirty working tree at start | — | Show `git status`; ask (stash / carry / stop) |
 | `create_execution` rejects repo_label | retry without it | Note the omission |
 | `claim_execution` errors | — | Expected; continue |
-| No spec, human present | `add_note` (answers) | Fold into plan Assumptions |
-| No spec, human absent | `spec_ticket` → `block_execution` | Stop |
-| Opus plan review NO-GO twice | `block_execution(reason)` | Stop |
+| No spec, questions answered | `add_note` (answers) | Fold into plan Assumptions |
+| No spec, questions unanswered | `spec_ticket` or `add_note`, per the answer | Ask (spec / assumptions / stop) |
+| Fable plan review NO-GO twice | `add_note`; `block_execution` *only if chosen* | Ask; record the decision |
 | Tests fail after 2 attempts | `add_note(details)` | Flag in handoff |
 | Requirement unmet after 2 attempts | `add_note(ids)` | Flag in handoff |
 | Push rejected / no credentials | `add_note` + `complete_execution` | Say branch is unpushed |
 | Rate limit or timeout | `add_note("retrying")` | Pause 30s, retry once |
-| Ticket out of scope for this repo | `skip_execution(reason)` | Stop |
+| Test suite needs unreachable service | per the answer | Ask (block / subset / stub) |
+| Ticket out of scope for this repo | `skip_execution` *only if chosen* | Ask (skip / record here / stop) |
+
+No row in this table ends the run on your own judgement. Every "ask" waits for an
+answer, and the terminal calls — `block_execution`, `skip_execution` — happen
+only when the user picks them.
 
 **Never:** push to the base branch, open a PR, call `get_queue` or claim someone
 else's queued execution, write plan/review/HTML files into the work repo, commit
-secrets, or run destructive migrations.
+secrets, or run destructive migrations. These are prohibited actions, not
+escalations — there is no question to ask, because the answer never makes them
+safe.
 
 ---
 
