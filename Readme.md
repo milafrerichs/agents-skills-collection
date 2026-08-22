@@ -19,9 +19,10 @@ The image sets `SKILLS_DIR=/app/skills` and `AGENTS_DIR=/app/agents`, which is
 what the server reads at boot to build its index. Override either one as a
 Railway service variable to point at a different location.
 
-Leave the service's **Root Directory** unset (or set it to `/`). Pointing it at
-`/mcp-server` would drop `skills/` and `agents/` from the build context and the
-server would come up with an empty index.
+Leave the service's **Root Directory** unset (or set it to `/`). Anything
+narrower drops `skills/` and `agents/` from the build context, and the build
+fails in the `source` stage with a message listing what the context did
+contain.
 
 `PORT` defaults to `3001` and is overridden by Railway at runtime.
 
