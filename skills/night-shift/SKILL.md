@@ -17,8 +17,9 @@ description: >
 
 An autonomous agent that fetches the task queue from the **Night Shift MCP
 Server**, claims each task atomically, works through it in an isolated git
-worktree, broadcasts real-time phase updates, and produces a morning report
-with worktree locations ready for human review.
+worktree, broadcasts real-time phase updates, and records the plan, review,
+and critic findings into the execution so the morning dashboard review looks
+the same as any other Night Shift MCP run (see `watched-run` / `work-shift`).
 
 ---
 
@@ -31,15 +32,27 @@ reading a local todo.md for the queue — always use get_queue first.
 |---|---|
 | get_queue | Once at startup — fetches ready executions from Linear |
 | claim_execution | Before touching any task — atomic lock |
-| get_issue_spec | Immediately after claiming — loads full Linear issue |
+| get_issue_spec | Immediately after claiming — loads full Linear issue + FR/NFR |
 | update_progress | At every phase transition |
 | add_note | To log observations, plan review results, test summaries |
+| store_artifact | Plan and combined Clean Code + Sandi Metz review markdown |
+| store_review_report | Self-review: hunk-annotated hand-off for the dashboard |
+| store_critic_report | Independent critic pass: risk-flagged annotations |
 | block_execution | Task cannot proceed due to external dependency |
 | skip_execution | Task is ambiguous or out of scope for tonight |
 | complete_execution | Task fully implemented, tests green, committed |
 | get_execution | To inspect state of a specific execution if needed |
 
-agent_id convention: night-shift-YYYYMMDD-NNN e.g. night-shift-20250126-001
+agent_id convention: `night-shift-YYYYMMDD-NNN` (e.g. `night-shift-20250126-001`).
+The critic pass uses a distinct id: `night-shift-critic-YYYYMMDD-NNN` — same
+reason as `watched-run`/`work-shift`: same id makes it a self-review wearing a
+costume, and the dashboard can no longer tell the two apart.
+
+Field shapes for `store_review_report` / `store_critic_report` / `summary_html`
+are in [`references/review-report.md`](references/review-report.md) — read it
+before Step 3f. It is the same payload shape `watched-run` and `work-shift`
+send, so a reviewer sees one consistent format regardless of which skill
+produced the execution.
 
 ---
 
@@ -48,23 +61,27 @@ agent_id convention: night-shift-YYYYMMDD-NNN e.g. night-shift-20250126-001
 ```
 1. INTAKE      - get_queue → display plan → confirm scope with user
 2. FOR EACH TASK (in queue order):
-   a. CLAIM    - claim_execution (atomic); get_issue_spec
-   b. PLAN     - Read docs + spec, write detailed plan, Opus review
+   a. CLAIM    - claim_execution (atomic); get_issue_spec (incl. FR/NFR)
+   b. PLAN     - Read docs + spec, write detailed plan (incl. requirements
+                 coverage), store_artifact(plan), Opus review
                  → update_progress(planning) + add_note(plan review result)
    c. BRANCH   - Create git worktree on a fresh branch
    d. IMPLEMENT- TDD: write failing tests first, then code to pass them
                  → update_progress(tdd) then update_progress(implement)
-   e. VERIFY   - Run tests / lint; iterate if failing
-                 → update_progress(verify) + add_note(test summary)
-   f. REVIEW   - Clean Code + Sandi Metz review; implement all findings
+   e. VERIFY   - Run tests / lint; walk every FR/NFR against evidence; iterate
+                 if failing → update_progress(verify) + add_note(test summary)
+   f. REVIEW   - Clean Code + Sandi Metz review; implement all findings;
+                 store_artifact(review) + store_review_report (self);
+                 independent critic subagent → store_critic_report
                  → update_progress(review)
    g. COMMIT   - Commit work; record worktree (no PR)
-                 → update_progress(commit) → complete_execution
-   h. SUMMARY  - Generate HTML change summary linking all artefacts
+                 → update_progress(commit) → complete_execution(branch,
+                   commit_sha, worktree_path, summary_html)
 3. REPORT      - Print morning summary: worktrees ready, tasks skipped/blocked
 ```
 
-Read references/worktree-ops.md for git worktree command patterns.
+Read [`references/worktree-ops.md`](references/worktree-ops.md) for git
+worktree command patterns.
 
 ---
 
@@ -139,9 +156,13 @@ Night Shift MCP → get_issue_spec
   execution_id: <execution_id>
 ```
 
-Returns: full Linear issue (title, description, parent issue, labels,
-acceptance criteria, linked sub-issues). Treat acceptance criteria as
-authoritative requirements.
+Returns the full Linear issue (title, description, parent issue, labels,
+linked sub-issues) plus parsed `functional_requirements` /
+`non_functional_requirements` (each `{id, text}`). **That FR/NFR list is the
+authoritative contract for this task** — it drives the plan's requirements
+coverage section (3b), the verify checklist (3e), and the `requirements` field
+of the review report (3f). Only fall back to the description's acceptance
+criteria when the spec has no FR/NFR sections.
 
 ### 3b. Plan
 
@@ -169,18 +190,29 @@ Produce a detailed implementation plan covering:
 5. Implementation steps — numbered, fine-grained, in execution order
 6. Edge cases & risks — anything that could go wrong; how to handle it
 7. Out of scope — explicit list of what will NOT be touched
+8. Requirements coverage — every FR and NFR id mapped to the step(s) and
+   test(s) that satisfy it. Anything not intended to be satisfied is called
+   out here as blocked or out of scope. A silently dropped requirement is the
+   most expensive failure mode a human reviewer can hit in the morning.
 
-Save to disk before writing any code:
+Keep the numbered step labels from item 5 stable — they become the
+`planCheck` rows in 3f.
 
-```bash
-mkdir -p night-shift-plans
-PLAN_PATH="night-shift-plans/${SLUG}.md"
-# Write plan content to $PLAN_PATH
+Store it on the execution — never write the plan into the target repo, it
+would ride into whatever the human eventually pushes and pollute their diff:
+
+```
+Night Shift MCP → store_artifact
+  execution_id:   <execution_id>
+  agent_id:       "night-shift-<timestamp>"
+  artifact_type:  "plan"
+  content:        <full plan markdown>
 ```
 
 #### Opus plan review (subagent)
 
-Spawn a subagent (model: claude-opus-4-5) with system prompt:
+Spawn a subagent (default model: Opus; use whichever the user has indicated
+otherwise) with system prompt:
 "You are a senior engineer doing a pre-implementation plan review. Be critical.
 Flag vague steps, missing edge cases, incorrect file assumptions, and anything
 that will likely cause problems during TDD."
@@ -190,7 +222,7 @@ gaps, risks, or improvements. End with GO / NO-GO and required changes if NO-GO.
 
 Parse response:
 - GO → proceed to 3c
-- NO-GO → apply required changes to plan file, re-run review once more
+- NO-GO → apply required changes to the plan, re-store_artifact, re-run review once more
 - Still NO-GO after one revision → call block_execution with reason; skip task
 
 Log review result via MCP:
@@ -199,8 +231,6 @@ Log review result via MCP:
 Night Shift MCP → add_note
   note: "Opus plan review: <GO|NO-GO>. <summary of key findings>"
 ```
-
-Append the Opus review to the plan file under ## Plan Review.
 
 ### 3c. Create worktree
 
@@ -269,17 +299,23 @@ Night Shift MCP → update_progress
 [ -f .eslintrc* ] && npx eslint . --max-warnings=0 2>&1 | tail -20
 ```
 
+Green tests are necessary, not sufficient: walk the FR/NFR list from 3a
+explicitly and point at concrete evidence (the test that exercises it, or the
+code that guarantees it) for each one.
+
 Log the outcome:
 
 ```
 Night Shift MCP → add_note
-  note: "Tests: <PASS|FAIL>. <N> passed, <M> failed. <brief summary>"
+  note: "Tests: <PASS|FAIL>. <N> passed, <M> failed.
+         Requirements: <X>/<Y> FR met, <A>/<B> NFR met. <unmet ids>"
 ```
 
-If tests fail after 2 fix attempts: commit what works, add_note with failure
-details, flag in morning report under Issues Encountered, continue.
+If tests fail, or a requirement stays unmet, after 2 fix attempts: commit what
+works, add_note with the details, flag in morning report under Issues
+Encountered, continue.
 
-### 3f. Code Review
+### 3f. Review — self, then critic, both hunk-anchored
 
 Signal review phase:
 
@@ -302,13 +338,54 @@ Focus on class responsibilities, Law of Demeter, message passing, flocking rules
 
 Implement ALL review findings. Re-run test suite to confirm nothing broke.
 
-Save both reviews to night-shift-plans/:
-- night-shift-plans/review-clean-code-${SLUG}.md
-- night-shift-plans/review-sandi-metz-${SLUG}.md
+Store the combined review markdown as an artifact — not as files in the
+worktree, same reasoning as the plan:
+
+```
+Night Shift MCP → store_artifact
+  execution_id:  <execution_id>
+  agent_id:      "night-shift-<timestamp>"
+  artifact_type: "review"
+  content:       <combined Clean Code + Sandi Metz review markdown>
+```
+
+Then store the structured self-assessment that powers the Focus Review and
+Walkthrough dashboard modes — field shapes are in
+[`references/review-report.md`](references/review-report.md):
+
+```
+Night Shift MCP → store_review_report
+  execution_id, agent_id, confidence, intro, outro,
+  requirements, planCheck, diff, selfReview, tests
+```
 
 ```bash
 git add -A
 git commit -m "refactor: apply clean-code + Sandi Metz review findings"
+```
+
+**Critic pass** — an independent adversarial second opinion, not the same
+agent grading its own work. Spawn a subagent (default model: Opus; use
+whichever the user has indicated otherwise):
+
+> You are a senior engineer doing an adversarial post-implementation review.
+> You did NOT write this code. Find real defects: correctness bugs, missing
+> edge cases, risky migrations, security issues. Anchor every finding to a
+> file and a line range.
+
+Send `git diff origin/$BASE_BRANCH..HEAD` plus a request for per-file
+findings with a `[start, end]` line range, severity (`blocker`/`warn`/`nit`),
+summary, optional rationale, an overall summary, and a verdict.
+
+```
+Night Shift MCP → store_critic_report
+  execution_id:  <execution_id>
+  agent_id:      "night-shift-critic-<timestamp>"
+  commit_sha:    "$(git rev-parse HEAD)"
+  verdict:       approve | approve_with_nits | request_changes
+  confidence:    <0-100>
+  summary:       "<overall takeaway>"
+  files:         [ ... ]   # empty array is a valid, honest clean review
 ```
 
 ### 3g. Commit & Complete
@@ -325,40 +402,35 @@ Night Shift MCP → update_progress
 cd "$WORKTREE_PATH"
 git add -A
 git diff --cached --quiet || git commit -m "chore: final cleanup"
-
-# Record worktree location for morning report
-echo "  branch=$BRANCH  path=$WORKTREE_PATH" >> /tmp/night-shift-worktrees.txt
+COMMIT_SHA=$(git rev-parse HEAD)
 ```
 
-Do NOT push or open a PR. Mark the execution complete:
+Do NOT push or open a PR. Generate a self-contained HTML summary (no external
+deps, inline CSS, `prefers-color-scheme`, no relative links — nothing on disk
+to link to yet) covering: header with task title/date/Linear link, plan
+review verdict, per-file change table, test results, requirements coverage,
+known issues. Template and exact expectations are in
+[`references/review-report.md`](references/review-report.md). Pass it
+directly to `complete_execution` — do not commit it into the worktree; a human
+who later pushes this branch should get their own diff back, not agent-authored
+docs riding along in it.
+
+Mark the execution complete:
 
 ```
 Night Shift MCP → complete_execution
-  agent_id:     "night-shift-<timestamp>"
-  execution_id: <execution_id>
+  agent_id:      "night-shift-<timestamp>"
+  execution_id:  <execution_id>
+  branch:        "$BRANCH"
+  commit_sha:    "$COMMIT_SHA"
+  worktree_path: "$WORKTREE_PATH"
+  summary_html:  <self-contained HTML — see references/review-report.md>
 ```
 
-### 3h. HTML Change Summary
-
-Generate a self-contained HTML file (no external deps, inline CSS, prefers-color-scheme):
+Record the worktree location locally too, for the morning report:
 
 ```bash
-HTML_PATH="$WORKTREE_PATH/night-shift-summary-${SLUG}.html"
-```
-
-Must include:
-- Header: task title, date, Linear ticket link (https://linear.app/team/issue/<ID>)
-- Plan link: night-shift-plans/${SLUG}.md
-- Opus plan review summary
-- Changes section: per-file — what changed, why, trade-offs
-- Clean Code + Sandi Metz review links
-- Test results: pass/fail summary + command used
-- Known issues (if any)
-
-```bash
-cp "$HTML_PATH" "night-shift-plans/summary-${SLUG}.html"
-git add -A
-git commit -m "docs: add night-shift change summary"
+echo "  branch=$BRANCH  path=$WORKTREE_PATH" >> /tmp/night-shift-worktrees.txt
 ```
 
 ---
@@ -377,7 +449,6 @@ TASKS COMPLETE (N)
   [TECH-123] add-user-search-endpoint
     branch:  night-shift/add-user-search-endpoint
     path:    /tmp/worktrees/add-user-search-endpoint
-    summary: night-shift-plans/summary-add-user-search-endpoint.html
     Linear:  complete_execution called - issue updated
 
 SKIPPED (M)
@@ -394,7 +465,8 @@ ISSUES ENCOUNTERED
   [TECH-124]: tests failing (redis mock); committed as-is, see worktree
 
 Next steps for reviewer:
-  1. Open night-shift-plans/summary-<slug>.html in browser for full context
+  1. Open the execution in the Night Shift dashboard for the plan, self-review,
+     and critic findings (same views as watched-run / work-shift executions)
   2. cd <worktree path> to inspect directly
   3. Push + open PR manually when satisfied
   4. Linear issues already updated via MCP (status, notes, skip/block reasons)
@@ -410,6 +482,7 @@ Next steps for reviewer:
 | Task ambiguous or no spec | skip_execution(reason) | Log in report |
 | Opus plan review NO-GO twice | block_execution(reason) | Log in report |
 | Tests fail after 2 retries | add_note(failure details) | Flag in report ⚠️ |
+| Requirement unmet after 2 attempts | add_note(unmet ids) | Flag in report ⚠️ |
 | Rate limits / timeouts | add_note("retrying") | Pause 30s, retry once |
 | Worktree dir already exists | — | git worktree remove --force, recreate |
 
@@ -418,6 +491,8 @@ Never:
 - Delete or modify unrelated files
 - Expose secrets or credentials in commits
 - Run destructive DB migrations
+- Write plan/review/summary files into the target repo (use store_artifact /
+  summary_html instead — they end up in whatever the human eventually pushes)
 
 ---
 
