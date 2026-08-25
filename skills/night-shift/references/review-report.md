@@ -196,8 +196,8 @@ makes it a self-review wearing a costume.
 ## summary_html
 
 Passed as `summary_html` on `complete_execution`. Self-contained: inline CSS,
-no external dependencies, no relative links — night-shift never pushes, so
-nothing exists anywhere a link could resolve to.
+no external dependencies, no relative links — the branch is pushed but there
+is no PR yet, so there's nowhere for a relative link to resolve to.
 
 ```html
 <h1>Night Shift: TECH-123</h1>
@@ -229,8 +229,8 @@ nothing exists anywhere a link could resolve to.
 <p>None.</p>
 
 <h2>Worktree</h2>
-<p>branch <code>night-shift/add-user-search-endpoint</code> at
-   <code>/tmp/worktrees/add-user-search-endpoint</code> — not pushed.</p>
+<p>branch <code>night-shift/add-user-search-endpoint</code>, pushed to
+   <code>origin/night-shift/add-user-search-endpoint</code> — no PR opened.</p>
 ```
 
 Do not re-embed the diff or the full plan/review markdown here — the diff is
