@@ -118,14 +118,20 @@ Night Shift MCP -> store_review_report
   intro:        "<2-3 sentence first-person summary>"
   outro:        "<first-person closing recommendation / open judgement calls>"
   requirements: [ "<FR/NFR>", ... ]
-  planCheck:    [ { step, status: match|partial|diverged, note, narration }, ... ]
-  selfReview:   [ { rule, verdict: pass|warn|fail, note }, ... ]
+  planCheck:    [ { step, status: match|partial|diverged, note, narration,
+                    diff?: <hunk for this step, or null> }, ... ]
+  selfReview:   [ { rule, verdict: pass|warn|fail, note, narration?,
+                    diff?: <hunk for this finding, or null> }, ... ]
   tests:        { passed, failed, added }
   diff:         [ { name, add, del, lines: [ { k: ctx|add|del, text,
                     annotation?: { summary, rationale?, confidence, tags? } }, ... ] }, ... ]
 ```
 `diff.lines[].annotation` explains what a piece of code does and why —
-attach it to 1-3 non-obvious lines per file, not every line.
+attach it to 1-3 non-obvious lines per file, not every line. Supply
+`selfReview[].narration` whenever `verdict` isn't `pass`, and a per-step/per-finding
+`diff` pointer wherever the step touched code — the Walkthrough dashboard mode
+falls back to a weaker guess or blank text without them, so an execution
+recorded here should read the same as one from `night-shift` or `work-shift`.
 
 **Critic pass** (independent, adversarial — correctness bugs, missing edge
 cases, migrations, security), anchored to the reviewed commit:
