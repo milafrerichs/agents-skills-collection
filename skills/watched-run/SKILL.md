@@ -6,10 +6,12 @@ description: Default workflow for real implementation work in this repo — any 
 # Watched Run
 
 A watched (human-present) single-ticket development session. Ticket content
-comes from Linear directly. Review comes from CI + CodeRabbit on a real PR.
-The Night Shift MCP is used only in its **record-only** mode
-(`create_execution`) to capture the plan and hunk-anchored explanations of
-what the code does and why — it never enters the autonomous queue.
+comes from the Night Shift MCP's `get_issue_spec` — the same structured
+FR/NFR + rework contract night-shift and work-shift plan against. Review
+comes from CI + CodeRabbit on a real PR. The Night Shift MCP is used in
+**record-only** mode (`create_execution`) to capture the plan and
+hunk-anchored explanations of what the code does and why — it never enters
+the autonomous queue.
 
 ## Scope — when this runs
 
@@ -32,10 +34,12 @@ opt-in. Concretely:
 ## Cycle
 
 ```
-1. TICKET    - Linear:get_issue(id) -> title, description, acceptance criteria, labels
-2. RECORD    - create_execution(linear_issue_id) -> execution_id (record-only, never queued)
+1. TICKET    - create_execution(linear_issue_id) -> execution_id (record-only, never queued);
+               get_issue_spec(execution_id) -> title, description, FR/NFR, rework state
+2. REWORK?   - if is_rework, address the reviewer's feedback on the prior branch instead
+               of steps 3-5 (see "Feedback iteration" below)
 3. PLAN      - write implementation plan; store_artifact; critical subagent review (GO/NO-GO)
-4. IMPLEMENT - TDD: red -> green -> refactor
+4. IMPLEMENT - TDD: red -> green -> refactor; update_progress at each phase transition
 5. VERIFY    - run tests/lint; confirm every FR/NFR is actually met
 6. REVIEW    - self-review; store_review_report with hunk-annotated explanations;
                critic subagent -> store_critic_report with risk-flagged annotations
@@ -45,16 +49,7 @@ opt-in. Concretely:
 9. REPORT    - summarize what changed, link the PR + execution record, note open items
 ```
 
-### 1. Get the ticket
-
-```
-Linear:get_issue(id: "TECH-123", includeRelations: true)
-```
-Treat the description + acceptance criteria as authoritative. If they're too
-thin to plan from, ask rather than guess — this is a watched run, a quick
-question is cheap.
-
-### 2. Record (not queue)
+### 1. Record, then get the ticket
 
 ```
 Night Shift MCP -> create_execution
@@ -65,7 +60,53 @@ Gives you an `execution_id` everything below attaches to. This is a
 history/reasoning record, never claimed by the overnight agent, with no
 queue effect until `complete_execution` at the end.
 
+```
+Night Shift MCP -> get_issue_spec
+  execution_id: <execution_id>
+```
+Returns the full Linear issue (title, description, parent issue, labels) plus
+parsed `functional_requirements` / `non_functional_requirements` (each `{id,
+text}`) — the same structured contract night-shift and work-shift plan
+against, so use it here too rather than a raw Linear ticket fetch. It also
+reports rework state: `is_rework`, the current round of `feedback` (newest
+first), and `previous_branch` / `previous_worktree_path` if a reviewer
+already sent this ticket back once.
+
+Treat the FR/NFR list as authoritative over the description's prose. If it's
+too thin to plan from, ask rather than guess — this is a watched run, a quick
+question is cheap.
+
+### 2. Feedback iteration (is_rework)
+
+If `get_issue_spec` returned `is_rework: true`, this ticket was already run
+once (by any of watched-run / work-shift / night-shift) and a reviewer left
+feedback. Do not re-plan or reimplement from scratch:
+
+1. Recover the prior work: `git fetch origin` then
+   `git checkout previous_branch` (or `git worktree add`/`checkout -b` from
+   it if it no longer exists locally) — never start a fresh branch off
+   `main` when a prior branch exists.
+2. Restate each `feedback` item as a concrete change before touching code.
+3. Store a short feedback-response plan instead of the full 8-part one:
+   `store_artifact(artifact_type: "plan", content: "## Feedback response\n- Feedback: <quote> -> Change: <what you'll do>\n...")`.
+4. Make the change, then continue at step 5 (Verify) below as normal. In
+   step 6, note in `selfReview` that this round addressed feedback rather
+   than an original plan, and mark `planCheck` per feedback item.
+5. Push the same branch — this is what lets the reviewer see the new round
+   on the PR they already opened, rather than a disconnected second PR.
+
 ### 3. Plan + plan review
+
+```
+Night Shift MCP -> update_progress
+  execution_id: <execution_id>
+  agent_id:     "watched-run-YYYYMMDD-NNN"
+  substatus:    "planning"
+```
+Call `update_progress` at each phase transition below (`planning`, `tdd`,
+`implement`, `verify`, `review`, `commit`) — a human is present, but the
+dashboard is what a reviewer opens later, and it should show live progress
+for a watched run exactly as it does for night-shift/work-shift.
 
 Cover: 1. Goal · 2. Affected files · 3. Data/type changes · 4. Test strategy
 (TDD) · 5. Implementation steps · 6. Edge cases & risks · 7. Out of scope ·
@@ -91,19 +132,40 @@ and flag to the user.
 
 ### 4. Implement (TDD)
 
+```
+Night Shift MCP -> update_progress
+  substatus: "tdd"
+```
+
 Red -> Green -> Refactor per plan step, on a normal feature branch (no
 worktree needed for a watched local run):
 ```bash
 git checkout -b <type>/<slug>   # e.g. feat/user-search-endpoint
 ```
 
+Once tests exist and implementation is underway:
+```
+Night Shift MCP -> update_progress
+  substatus: "implement"
+```
+
 ### 5. Verify
+
+```
+Night Shift MCP -> update_progress
+  substatus: "verify"
+```
 
 Run the repo's actual test/lint commands (see root CLAUDE.md / AGENTS.md).
 Walk every FR/NFR from the plan against concrete evidence — fix anything
 unmet, or flag it explicitly.
 
 ### 6. Review — self, then critic, both hunk-anchored
+
+```
+Night Shift MCP -> update_progress
+  substatus: "review"
+```
 
 This is where "what does this code do, what are the risk factors, explain
 the critical pieces" gets captured — in the execution's review record,
@@ -145,6 +207,11 @@ Night Shift MCP -> store_critic_report
 Empty `files: []` is a valid, honest clean review.
 
 ### 7. Ship
+
+```
+Night Shift MCP -> update_progress
+  substatus: "commit"
+```
 
 ```bash
 git add -A && git commit -m "feat: <what> — <why>"
@@ -214,3 +281,4 @@ execution record (plan + review + critic findings), anything left open.
 | Run destructive DB migrations |
 | Expand a review comment into unrequested scope |
 | Call `claim_execution` / `get_queue` for this record (it must stay unqueued) |
+| Write plan/review/summary files into the repo (use store_artifact / summary_html — a human reviewing the diff should get their own diff back, not agent-authored docs riding along in it) |
