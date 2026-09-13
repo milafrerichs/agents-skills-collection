@@ -109,7 +109,21 @@ This is where "what does this code do, what are the risk factors, explain
 the critical pieces" gets captured — in the execution's review record,
 anchored to actual lines, not in a scratch file.
 
-**Self-review**: fix findings from your own read, re-run tests, then:
+**Self-review**: same two passes night-shift runs — Clean Code (read
+`/mnt/skills/user/clean-code/SKILL.md`: naming, function length, single
+responsibility, comments, error handling) and Sandi Metz OO Design (read
+`/mnt/skills/user/sandi-metz-reviewer/SKILL.md`: class responsibilities, Law
+of Demeter, message passing, flocking rules). Implement all findings and
+re-run tests, then store the combined review markdown — same rule as the
+plan, it lives on the execution record, not in the repo:
+```
+Night Shift MCP -> store_artifact
+  execution_id:   <execution_id>
+  agent_id:       "watched-run-YYYYMMDD-NNN"
+  artifact_type:  "review"
+  content:        <combined Clean Code + Sandi Metz review markdown>
+```
+Then the structured self-assessment:
 ```
 Night Shift MCP -> store_review_report
   execution_id: <execution_id>
@@ -127,8 +141,17 @@ Night Shift MCP -> store_review_report
 `diff.lines[].annotation` explains what a piece of code does and why —
 attach it to 1-3 non-obvious lines per file, not every line.
 
-**Critic pass** (independent, adversarial — correctness bugs, missing edge
-cases, migrations, security), anchored to the reviewed commit:
+**Critic pass** — an independent adversarial second opinion, not the same
+agent grading its own work. Spawn a subagent (default model: Opus; use
+whichever the user has indicated otherwise):
+
+> You are a senior engineer doing an adversarial post-implementation review.
+> You did NOT write this code. Find real defects: correctness bugs, missing
+> edge cases, risky migrations, security issues. Anchor every finding to a
+> file and a line range.
+
+Send `git diff origin/<base-branch>..HEAD` plus a request for per-file
+findings, anchored to the reviewed commit:
 ```
 Night Shift MCP -> store_critic_report
   execution_id: <execution_id>
@@ -169,6 +192,7 @@ Night Shift MCP -> complete_execution
   agent_id:      "watched-run-YYYYMMDD-NNN"
   branch:        "<branch>"
   commit_sha:    "$(git rev-parse HEAD)"
+  remote:        "origin"
   pushed_ref:    "<branch>"
   pushed_sha:    "$(git rev-parse HEAD)"   # re-read AFTER push
   worktree_path: "$(pwd)"
@@ -213,4 +237,5 @@ execution record (plan + review + critic findings), anything left open.
 | Expose secrets/credentials in commits |
 | Run destructive DB migrations |
 | Expand a review comment into unrequested scope |
-| Call `claim_execution` / `get_queue` for this record (it must stay unqueued) |
+| Write plan/review/summary content into the target repo (use `store_artifact` / `summary_html` instead — it would ride into the PR diff) |
+| Call `claim_execution` / `get_queue` / `block_execution` / `skip_execution` for this record (it must stay unqueued) |
