@@ -32,8 +32,8 @@ opt-in. Concretely:
 ## Cycle
 
 ```
-1. TICKET    - Linear:get_issue(id) -> title, description, acceptance criteria, labels
-2. RECORD    - create_execution(linear_issue_id) -> execution_id (record-only, never queued)
+1. RECORD    - create_execution(linear_issue_id) -> execution_id (record-only, never queued)
+2. SPEC      - get_issue_spec(execution_id) -> title, description, FR/NFR checklist
 3. PLAN      - write implementation plan; store_artifact; critical subagent review (GO/NO-GO)
 4. IMPLEMENT - TDD: red -> green -> refactor
 5. VERIFY    - run tests/lint; confirm every FR/NFR is actually met
@@ -45,16 +45,7 @@ opt-in. Concretely:
 9. REPORT    - summarize what changed, link the PR + execution record, note open items
 ```
 
-### 1. Get the ticket
-
-```
-Linear:get_issue(id: "TECH-123", includeRelations: true)
-```
-Treat the description + acceptance criteria as authoritative. If they're too
-thin to plan from, ask rather than guess — this is a watched run, a quick
-question is cheap.
-
-### 2. Record (not queue)
+### 1. Record (not queue)
 
 ```
 Night Shift MCP -> create_execution
@@ -64,6 +55,23 @@ Night Shift MCP -> create_execution
 Gives you an `execution_id` everything below attaches to. This is a
 history/reasoning record, never claimed by the overnight agent, with no
 queue effect until `complete_execution` at the end.
+
+### 2. Load the spec
+
+```
+Night Shift MCP -> get_issue_spec
+  execution_id: <execution_id>
+```
+Returns the full Linear issue (title, description, parent, labels) plus
+parsed `functional_requirements` / `non_functional_requirements` (each
+`{id, text}`) — the same FR/NFR contract `night-shift` and `work-shift` use.
+Source the plan's requirements coverage (step 3), the verify walk (step 5),
+and the review report's `requirements` field (step 6) from this list, not
+from re-reading the description by eye. Only fall back to the description's
+acceptance criteria when the spec has no FR/NFR sections.
+
+Treat the spec as authoritative. If it's too thin to plan from, ask rather
+than guess — this is a watched run, a quick question is cheap.
 
 ### 3. Plan + plan review
 
@@ -161,6 +169,11 @@ TECH-123
 EOF
 )"
 ```
+If the push fails (credentials, network, rejected ref), stop and tell the user
+the error — do not open the PR or call `complete_execution`. Never invent a
+pushed ref/sha to satisfy the schema; an execution that claims to be pushed
+but isn't is discovered later by whoever tries to check it out.
+
 Never force-push once the PR is open and someone (or CodeRabbit) may be reading it.
 
 ```
@@ -214,3 +227,4 @@ execution record (plan + review + critic findings), anything left open.
 | Run destructive DB migrations |
 | Expand a review comment into unrequested scope |
 | Call `claim_execution` / `get_queue` for this record (it must stay unqueued) |
+| Invent a pushed branch/sha to satisfy `complete_execution` when the push failed |
