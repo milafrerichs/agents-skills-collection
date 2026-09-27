@@ -37,7 +37,8 @@ opt-in. Concretely:
 3. PLAN      - write implementation plan; store_artifact; critical subagent review (GO/NO-GO)
 4. IMPLEMENT - TDD: red -> green -> refactor
 5. VERIFY    - run tests/lint; confirm every FR/NFR is actually met
-6. REVIEW    - self-review; store_review_report with hunk-annotated explanations;
+6. REVIEW    - Clean Code + Sandi Metz self-review, store_artifact(review);
+               store_review_report with hunk-annotated explanations;
                critic subagent -> store_critic_report with risk-flagged annotations
 7. SHIP      - commit, push, open a PR; complete_execution (record only, not a queue exit)
 8. CI/REVIEW - wait for CI + CodeRabbit; address every comment (add_review_comment
@@ -109,37 +110,48 @@ This is where "what does this code do, what are the risk factors, explain
 the critical pieces" gets captured — in the execution's review record,
 anchored to actual lines, not in a scratch file.
 
-**Self-review**: fix findings from your own read, re-run tests, then:
+Get changed files:
+```bash
+git diff origin/<base-branch> --name-only
+```
+
+Review 1 — Clean Code (read /mnt/skills/user/clean-code/SKILL.md first):
+Focus on naming, function length, single responsibility, comments, error handling.
+
+Review 2 — Sandi Metz OO Design (read /mnt/skills/user/sandi-metz-reviewer/SKILL.md):
+Focus on class responsibilities, Law of Demeter, message passing, flocking rules.
+
+Implement ALL review findings, re-run tests to confirm nothing broke, then
+store the combined review markdown as an artifact — not as files in the repo,
+same reasoning as the plan:
+
+```
+Night Shift MCP -> store_artifact
+  execution_id:  <execution_id>
+  agent_id:      "watched-run-YYYYMMDD-NNN"
+  artifact_type: "review"
+  content:       <combined Clean Code + Sandi Metz review markdown>
+```
+
+Then store the structured self-assessment that powers the Focus Review and
+Walkthrough dashboard modes — field shapes are in
+[`references/review-report.md`](references/review-report.md), the same shape
+`night-shift` and `work-shift` send:
+
 ```
 Night Shift MCP -> store_review_report
-  execution_id: <execution_id>
-  agent_id:     "watched-run-YYYYMMDD-NNN"
-  confidence:   <0-100>   # >=85 safe, 70-84 skim, <70 scrutinize
-  intro:        "<2-3 sentence first-person summary>"
-  outro:        "<first-person closing recommendation / open judgement calls>"
-  requirements: [ "<FR/NFR>", ... ]
-  planCheck:    [ { step, status: match|partial|diverged, note, narration }, ... ]
-  selfReview:   [ { rule, verdict: pass|warn|fail, note }, ... ]
-  tests:        { passed, failed, added }
-  diff:         [ { name, add, del, lines: [ { k: ctx|add|del, text,
-                    annotation?: { summary, rationale?, confidence, tags? } }, ... ] }, ... ]
+  execution_id, agent_id, confidence, intro, outro,
+  requirements, planCheck, diff, selfReview, tests
 ```
-`diff.lines[].annotation` explains what a piece of code does and why —
-attach it to 1-3 non-obvious lines per file, not every line.
 
 **Critic pass** (independent, adversarial — correctness bugs, missing edge
-cases, migrations, security), anchored to the reviewed commit:
+cases, migrations, security), anchored to the reviewed commit. Field shapes
+are also in [`references/review-report.md`](references/review-report.md):
+
 ```
 Night Shift MCP -> store_critic_report
-  execution_id: <execution_id>
-  agent_id:     "watched-run-critic-YYYYMMDD-NNN"
-  commit_sha:   "$(git rev-parse HEAD)"
-  verdict:      approve | approve_with_nits | request_changes
-  confidence:   <0-100>
-  summary:      "<overall takeaway>"
-  files: [ { path, summary?, annotations: [
-    { newRange: [start, end], summary, rationale?, severity: blocker|warn|nit, tags? }
-  ] } ]
+  execution_id, agent_id, commit_sha,
+  verdict, confidence, summary, files
 ```
 `severity` + `rationale` is the risk-factor callout — concrete, not vague.
 Empty `files: []` is a valid, honest clean review.
@@ -169,10 +181,11 @@ Night Shift MCP -> complete_execution
   agent_id:      "watched-run-YYYYMMDD-NNN"
   branch:        "<branch>"
   commit_sha:    "$(git rev-parse HEAD)"
+  worktree_path: "$(pwd)"
+  remote:        "origin"
   pushed_ref:    "<branch>"
   pushed_sha:    "$(git rev-parse HEAD)"   # re-read AFTER push
-  worktree_path: "$(pwd)"
-  summary_html:  <short self-contained HTML: what changed, link to PR>
+  summary_html:  <short self-contained HTML: what changed, link to PR — see references/review-report.md>
 ```
 
 ### 8. Wait for CI + CodeRabbit, then address comments
@@ -214,3 +227,4 @@ execution record (plan + review + critic findings), anything left open.
 | Run destructive DB migrations |
 | Expand a review comment into unrequested scope |
 | Call `claim_execution` / `get_queue` for this record (it must stay unqueued) |
+| Write plan/review/summary files into the target repo (use `store_artifact` / `summary_html` instead) |
