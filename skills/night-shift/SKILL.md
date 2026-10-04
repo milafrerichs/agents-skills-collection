@@ -124,7 +124,7 @@ local paths, and returns an ordered list of executions. Each execution has:
 ```
 Night Shift Plan
 ================
-Agent:   night-shift-<timestamp>
+Agent:   night-shift-YYYYMMDD-NNN
 Tasks:   <N> ready in queue
 
 Queue:
@@ -168,7 +168,7 @@ from picking up the same task:
 
 ```
 Night Shift MCP → claim_execution
-  agent_id:     "night-shift-<timestamp>"
+  agent_id:     "night-shift-YYYYMMDD-NNN"
   execution_id: <execution_id>
 ```
 
@@ -310,7 +310,7 @@ would ride into whatever the human eventually pushes and pollute their diff:
 ```
 Night Shift MCP → store_artifact
   execution_id:   <execution_id>
-  agent_id:       "night-shift-<timestamp>"
+  agent_id:       "night-shift-YYYYMMDD-NNN"
   artifact_type:  "plan"
   content:        <full plan markdown>
 ```
@@ -451,7 +451,7 @@ worktree, same reasoning as the plan:
 ```
 Night Shift MCP → store_artifact
   execution_id:  <execution_id>
-  agent_id:      "night-shift-<timestamp>"
+  agent_id:      "night-shift-YYYYMMDD-NNN"
   artifact_type: "review"
   content:       <combined Clean Code + Sandi Metz review markdown>
 ```
@@ -487,13 +487,23 @@ summary, optional rationale, an overall summary, and a verdict.
 ```
 Night Shift MCP → store_critic_report
   execution_id:  <execution_id>
-  agent_id:      "night-shift-critic-<timestamp>"
+  agent_id:      "night-shift-critic-YYYYMMDD-NNN"
   commit_sha:    "$(git rev-parse HEAD)"
   verdict:       approve | approve_with_nits | request_changes
   confidence:    <0-100>
   summary:       "<overall takeaway>"
   files:         [ ... ]   # empty array is a valid, honest clean review
 ```
+
+Anchor the critic to the commit that will actually be pushed: commit anything
+pending *before* spawning it, so `commit_sha` is the tip 3g pushes. If 3g adds
+another commit, the findings point at a stale SHA — only add one if the tree is
+dirty, and say so in `add_note`.
+
+The critic is advisory (nobody is awake to act on it), but its `confidence`
+must be honest: `request_changes` with blocker annotations means the
+self-review `confidence` is `< 70`, so the reviewer scrutinizes it first. Fix
+blockers you agree with before 3g; flag the rest in the morning report.
 
 ### 3g. Commit & Complete
 
@@ -555,7 +565,7 @@ Mark the execution complete:
 
 ```
 Night Shift MCP → complete_execution
-  agent_id:      "night-shift-<timestamp>"
+  agent_id:      "night-shift-YYYYMMDD-NNN"
   execution_id:  <execution_id>
   branch:        "$BRANCH"
   commit_sha:    "$PUSHED_SHA"
@@ -574,7 +584,7 @@ Night Shift MCP → complete_execution
 Morning Report
 ==============
 Night Shift Complete
-Agent:    night-shift-<timestamp>
+Agent:    night-shift-YYYYMMDD-NNN
 Started:  <timestamp>
 Finished: <timestamp>
 

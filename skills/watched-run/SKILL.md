@@ -109,7 +109,12 @@ This is where "what does this code do, what are the risk factors, explain
 the critical pieces" gets captured — in the execution's review record,
 anchored to actual lines, not in a scratch file.
 
-**Self-review**: fix findings from your own read, re-run tests, then:
+**Self-review**: do a Clean Code pass (naming, function length, single
+responsibility, error handling) and a Sandi Metz OO-design pass (class
+responsibilities, Law of Demeter, message passing) — same two lenses as
+`night-shift` / `work-shift`. Implement the findings, re-run tests, store the
+combined review markdown with `store_artifact` (`artifact_type: "review"`,
+`execution_id`, `agent_id`), then:
 ```
 Night Shift MCP -> store_review_report
   execution_id: <execution_id>
@@ -143,6 +148,9 @@ Night Shift MCP -> store_critic_report
 ```
 `severity` + `rationale` is the risk-factor callout — concrete, not vague.
 Empty `files: []` is a valid, honest clean review.
+The critic is advisory, but keep `confidence` honest: `request_changes` with
+blocker annotations means the self-review confidence is `< 70`. Fix blockers
+you agree with before shipping (you have a human right here — ask on the rest).
 
 ### 7. Ship
 
