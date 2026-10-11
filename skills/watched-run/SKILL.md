@@ -52,7 +52,21 @@ Linear:get_issue(id: "TECH-123", includeRelations: true)
 ```
 Treat the description + acceptance criteria as authoritative. If they're too
 thin to plan from, ask rather than guess — this is a watched run, a quick
-question is cheap.
+question is cheap. (This is the one deliberate difference from `night-shift`,
+which skips an under-specified ticket because nobody is awake to answer.)
+
+After step 2 gives you an `execution_id`, also call
+`get_issue_spec(execution_id)`: it returns the parsed `functional_requirements`
+/ `non_functional_requirements` (each `{id, text}`). **That FR/NFR list is the
+requirements contract**, exactly as in `night-shift` — it drives the plan's
+requirements coverage (3), the verify checklist (5), and the report's
+`requirements` field (6). Fall back to the description's acceptance criteria
+only when there are no FR/NFR sections.
+
+Before planning, read the repo's `CLAUDE.md` / `AGENTS.md` and follow its
+conventions (gates to run, docs/demo/changelog to keep in sync). Where it says
+"don't commit/push/open PRs unless asked", this skill's explicit request to
+ship (step 7) counts as the ask.
 
 ### 2. Record (not queue)
 
@@ -79,6 +93,8 @@ Night Shift MCP -> store_artifact
   content:        <full plan markdown>
 ```
 Don't write the plan into the repo — it lives on the execution record.
+Keep the numbered step labels from "Implementation steps" stable — they become
+the `planCheck` rows in step 6.
 
 Spawn a critical review subagent before writing code (default model: Opus;
 use whichever the user has indicated otherwise). Prompt: "You are a senior
@@ -91,17 +107,24 @@ and flag to the user.
 
 ### 4. Implement (TDD)
 
-Red -> Green -> Refactor per plan step, on a normal feature branch (no
-worktree needed for a watched local run):
+Load the `tdd` skill first, then Red -> Green -> Refactor per plan step, on a
+normal feature branch (no worktree needed for a watched local run):
 ```bash
-git checkout -b <type>/<slug>   # e.g. feat/user-search-endpoint
+git fetch origin
+BASE_BRANCH=<repo default branch>   # e.g. main; used for every diff below
+git checkout -b <type>/<slug> "origin/$BASE_BRANCH"   # e.g. feat/user-search-endpoint
 ```
+For large tasks commit at each Green milestone so the critic gets a readable
+history.
 
 ### 5. Verify
 
 Run the repo's actual test/lint commands (see root CLAUDE.md / AGENTS.md).
-Walk every FR/NFR from the plan against concrete evidence — fix anything
-unmet, or flag it explicitly.
+Green tests are necessary, not sufficient: walk every FR/NFR from the plan
+against concrete evidence (the test that exercises it, or the code that
+guarantees it) — fix anything unmet (after 2 failed attempts, ask the user
+rather than pushing on), or flag it explicitly. NFRs (persistence, security,
+performance) are often not covered by unit tests — verify them directly.
 
 ### 6. Review — self, then critic, both hunk-anchored
 
@@ -109,7 +132,21 @@ This is where "what does this code do, what are the risk factors, explain
 the critical pieces" gets captured — in the execution's review record,
 anchored to actual lines, not in a scratch file.
 
-**Self-review**: fix findings from your own read, re-run tests, then:
+**Self-review**: run the same two reviews as `night-shift` — Clean Code
+(`clean-code` skill) and Sandi Metz OO design (`sandi-metz-reviewer` skill) —
+over `git diff origin/$BASE_BRANCH --name-only`, implement the findings,
+re-run tests, then store the combined review markdown:
+```
+Night Shift MCP -> store_artifact
+  execution_id:  <execution_id>
+  agent_id:      "watched-run-YYYYMMDD-NNN"
+  artifact_type: "review"
+  content:       <combined Clean Code + Sandi Metz review markdown>
+```
+and the structured self-assessment. Full field shapes (incl. `narration` /
+per-step `diff` for planCheck and non-`pass` selfReview entries, and the
+confidence buckets) are in `night-shift/references/review-report.md` — same
+payload for all three skills, so a reviewer sees one format:
 ```
 Night Shift MCP -> store_review_report
   execution_id: <execution_id>
@@ -127,8 +164,14 @@ Night Shift MCP -> store_review_report
 `diff.lines[].annotation` explains what a piece of code does and why —
 attach it to 1-3 non-obvious lines per file, not every line.
 
-**Critic pass** (independent, adversarial — correctness bugs, missing edge
-cases, migrations, security), anchored to the reviewed commit:
+**Critic pass** — independent, not the same agent grading its own work. Spawn a
+subagent (default model: Opus; whichever the user indicates otherwise):
+"You are a senior engineer doing an adversarial post-implementation review. You
+did NOT write this code. Find real defects: correctness bugs, missing edge
+cases, risky migrations, security issues. Anchor every finding to a file and a
+line range." Send `git diff origin/$BASE_BRANCH..HEAD` and ask for per-file
+findings with `[start, end]` ranges, severity, summary, rationale, and a
+verdict. Anchored to the reviewed commit:
 ```
 Night Shift MCP -> store_critic_report
   execution_id: <execution_id>
@@ -142,7 +185,11 @@ Night Shift MCP -> store_critic_report
   ] } ]
 ```
 `severity` + `rationale` is the risk-factor callout — concrete, not vague.
-Empty `files: []` is a valid, honest clean review.
+Empty `files: []` is a valid, honest clean review. Set `confidence` honestly:
+`request_changes` with `blocker` annotations means `< 70`. Unlike `night-shift`
+(where the critic is advisory because no one is awake), a human is present
+here: fix every `blocker` before shipping, re-store the review report, and
+re-run the critic on the new `HEAD` so `commit_sha` is never stale.
 
 ### 7. Ship
 
@@ -196,7 +243,12 @@ Night Shift MCP -> add_review_comment
 ```
 Commit naming the comment it resolves, push (no force-push), re-run
 `gh pr checks --watch`; loop until green or nothing addressable without a
-human decision. Stale/ambiguous comments: say so, don't guess.
+human decision. Stale/ambiguous comments: say so, don't guess. This is the
+watched-run equivalent of `night-shift`'s Feedback Iteration Mode: change only
+what each comment asks for, don't re-plan or reimplement. If a round changes
+substantive code, re-run verify, re-store `store_review_report` (planCheck =
+one row per comment, `step` = short quote), and re-run the critic on the new
+`HEAD`.
 
 ### 9. Report
 
@@ -213,4 +265,6 @@ execution record (plan + review + critic findings), anything left open.
 | Expose secrets/credentials in commits |
 | Run destructive DB migrations |
 | Expand a review comment into unrequested scope |
+| Write plan/review/summary files into the repo (use `store_artifact` / `summary_html`) |
+| Spec an under-specified ticket yourself and then implement it — ask the user |
 | Call `claim_execution` / `get_queue` for this record (it must stay unqueued) |

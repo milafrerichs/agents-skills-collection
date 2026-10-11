@@ -151,6 +151,8 @@ the `local_path_hint` / `repo_label` / `default_branch` / `github_url` that
 ```bash
 cd <local_path_hint from the execution>
 git status --short
+# Read the repo's CLAUDE.md / AGENTS.md (same as watched-run): it names the
+# gates to run and any docs/demo/changelog that must change with the code.
 # Prefer the execution's default_branch; fall back to the checked-out HEAD:
 BASE_BRANCH="${default_branch:-$(git symbolic-ref --short HEAD)}"   # usually main or master
 ```
