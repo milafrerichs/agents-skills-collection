@@ -396,15 +396,18 @@ Night Shift MCP → update_progress
 ```
 
 ```bash
-# Node
+# Prefer the repo's own gates (root CLAUDE.md / AGENTS.md / package.json
+# scripts: typecheck + lint + test). Only fall back to detection if none are
+# documented:
 [ -f package.json ] && npm test 2>&1 | tail -30
-# Python
 [ -f pyproject.toml ] && python -m pytest --tb=short 2>&1 | tail -30
-# Encore
 [ -f encore.app ] && encore test ./... 2>&1 | tail -30
-# Lint
-[ -f .eslintrc* ] && npx eslint . --max-warnings=0 2>&1 | tail -20
+# Lint (eslint.config.* is the flat config; .eslintrc* the legacy one)
+ls eslint.config.* .eslintrc* >/dev/null 2>&1 && npx eslint . --max-warnings=0 2>&1 | tail -20
 ```
+
+Also honor any "update demo / CHANGELOG / docs in the same change" rule in the
+repo's CLAUDE.md — it is part of done, same as green tests.
 
 Green tests are necessary, not sufficient: walk the FR/NFR list from 3a
 explicitly and point at concrete evidence (the test that exercises it, or the

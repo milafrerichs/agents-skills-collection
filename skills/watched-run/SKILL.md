@@ -50,9 +50,12 @@ opt-in. Concretely:
 ```
 Linear:get_issue(id: "TECH-123", includeRelations: true)
 ```
-Treat the description + acceptance criteria as authoritative. If they're too
-thin to plan from, ask rather than guess — this is a watched run, a quick
-question is cheap.
+Treat the description + acceptance criteria as authoritative. If the ticket
+carries a spec with numbered `FR-00N` / `NFR-00N` requirements, that list is
+the contract (same as in night-shift): the plan's requirements coverage, the
+verify walk-through and the review report's `requirements` field all use it.
+If it's too thin to plan from, ask rather than guess — this is a watched
+run, a quick question is cheap (night-shift would `skip_execution` here).
 
 ### 2. Record (not queue)
 
@@ -91,7 +94,7 @@ and flag to the user.
 
 ### 4. Implement (TDD)
 
-Red -> Green -> Refactor per plan step, on a normal feature branch (no
+Read the `tdd` skill first, then Red -> Green -> Refactor per plan step, on a normal feature branch (no
 worktree needed for a watched local run):
 ```bash
 git checkout -b <type>/<slug>   # e.g. feat/user-search-endpoint
@@ -99,9 +102,12 @@ git checkout -b <type>/<slug>   # e.g. feat/user-search-endpoint
 
 ### 5. Verify
 
-Run the repo's actual test/lint commands (see root CLAUDE.md / AGENTS.md).
-Walk every FR/NFR from the plan against concrete evidence — fix anything
-unmet, or flag it explicitly.
+Run the repo's actual gates (see root CLAUDE.md / AGENTS.md — typically
+typecheck + lint + test; never assume plain `npm test` is enough) and honor
+any "update demo / CHANGELOG / docs in the same change" rules found there.
+Walk every FR/NFR from the plan against concrete evidence (the test that
+exercises it, or the code that guarantees it) — NFRs are often not covered
+by unit tests, so verify them explicitly. Fix anything unmet, or flag it.
 
 ### 6. Review — self, then critic, both hunk-anchored
 
@@ -109,7 +115,11 @@ This is where "what does this code do, what are the risk factors, explain
 the critical pieces" gets captured — in the execution's review record,
 anchored to actual lines, not in a scratch file.
 
-**Self-review**: fix findings from your own read, re-run tests, then:
+**Self-review**: run the Clean Code and Sandi Metz reviews (read the
+`clean-code` and `sandi-metz-reviewer` skills; use their exact rule names in
+`selfReview`), implement every finding, re-run tests, store the combined
+review markdown with `store_artifact` (`artifact_type: "review"`, never as a
+file in the repo), then:
 ```
 Night Shift MCP -> store_review_report
   execution_id: <execution_id>
@@ -142,7 +152,9 @@ Night Shift MCP -> store_critic_report
   ] } ]
 ```
 `severity` + `rationale` is the risk-factor callout — concrete, not vague.
-Empty `files: []` is a valid, honest clean review.
+Empty `files: []` is a valid, honest clean review. Set `confidence` honestly:
+`request_changes` with `blocker` annotations means `< 70`. Here, unlike
+overnight, blockers are fixed before shipping (the human is present).
 
 ### 7. Ship
 
