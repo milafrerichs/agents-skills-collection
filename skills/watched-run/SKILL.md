@@ -65,6 +65,20 @@ Gives you an `execution_id` everything below attaches to. This is a
 history/reasoning record, never claimed by the overnight agent, with no
 queue effect until `complete_execution` at the end.
 
+Then call `get_issue_spec(execution_id)` for the parsed
+`functional_requirements` / `non_functional_requirements` (`FR-001`,
+`NFR-001`, ...). That list is the requirements contract for the plan's
+coverage section, the verify walk, and the review report's `requirements` —
+same as night-shift. Fall back to the Linear description's acceptance
+criteria only when the spec has no FR/NFR sections. Also capture
+`BASE_BRANCH` (the repo's default branch) for diffs and the PR base.
+
+Signal phases as you go with `update_progress` (`planning` → `tdd` →
+`implement` → `verify` → `review` → `commit`; pass `agent_id` + `execution_id`)
+and log test/plan-review outcomes with `add_note`, so the dashboard timeline
+looks like a night-shift run's. Skipping these leaves the execution looking
+stalled at its first phase.
+
 ### 3. Plan + plan review
 
 Cover: 1. Goal · 2. Affected files · 3. Data/type changes · 4. Test strategy
@@ -100,8 +114,15 @@ git checkout -b <type>/<slug>   # e.g. feat/user-search-endpoint
 ### 5. Verify
 
 Run the repo's actual test/lint commands (see root CLAUDE.md / AGENTS.md).
-Walk every FR/NFR from the plan against concrete evidence — fix anything
-unmet, or flag it explicitly.
+Green tests are necessary, not sufficient: walk every FR/NFR from the plan
+against concrete evidence (the test that exercises it, or the code that
+guarantees it). Log the result with `add_note` (tests pass/fail counts,
+`X/Y FR met, A/B NFR met, <unmet ids>`).
+
+If tests fail or a requirement stays unmet after 2 fix attempts, stop and
+ask the user (night-shift would commit what works, flag it, and continue —
+here a human is present). Record whatever they decide in `add_note` and the
+review report's `outro`.
 
 ### 6. Review — self, then critic, both hunk-anchored
 
@@ -109,7 +130,22 @@ This is where "what does this code do, what are the risk factors, explain
 the critical pieces" gets captured — in the execution's review record,
 anchored to actual lines, not in a scratch file.
 
-**Self-review**: fix findings from your own read, re-run tests, then:
+**Self-review**: run the Clean Code review (`clean-code` skill: naming,
+function length, single responsibility, comments, error handling) and the
+Sandi Metz OO design review (`sandi-metz-reviewer` skill: responsibilities,
+Law of Demeter, message passing), implement all findings, re-run tests, then
+store the combined review markdown (not as files in the repo):
+```
+Night Shift MCP -> store_artifact
+  execution_id:  <execution_id>
+  agent_id:      "watched-run-YYYYMMDD-NNN"
+  artifact_type: "review"
+  content:       <combined Clean Code + Sandi Metz review markdown>
+```
+and the structured self-assessment (exact field shapes, plus the critic and
+`summary_html` payloads, are in the night-shift skill's
+`references/review-report.md` — same format for every skill). Keep each
+`planCheck.step` readable and stable, one per plan step stored in §3:
 ```
 Night Shift MCP -> store_review_report
   execution_id: <execution_id>
@@ -210,6 +246,7 @@ execution record (plan + review + critic findings), anything left open.
 | Push directly to main/master |
 | Force-push a branch someone (or CodeRabbit) may be reading |
 | Delete or modify unrelated files |
+| Write plan/review/summary files into the repo (use `store_artifact` / `summary_html`) |
 | Expose secrets/credentials in commits |
 | Run destructive DB migrations |
 | Expand a review comment into unrequested scope |
