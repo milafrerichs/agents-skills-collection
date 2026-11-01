@@ -86,8 +86,9 @@ engineer doing a pre-implementation plan review. Be critical. Flag vague
 steps, missing edge cases, incorrect file assumptions, anything likely to
 break during TDD. End with GO / NO-GO and required changes if NO-GO."
 
-GO -> proceed. NO-GO -> revise once, re-store, re-review. Still NO-GO -> stop
-and flag to the user.
+GO -> proceed (log it: `add_note` "Opus plan review: GO. <key findings>").
+NO-GO -> revise once, re-store, re-review. Still NO-GO -> stop and flag to the
+user (the watched equivalent of night-shift's `block_execution`).
 
 ### 4. Implement (TDD)
 
@@ -100,8 +101,13 @@ git checkout -b <type>/<slug>   # e.g. feat/user-search-endpoint
 ### 5. Verify
 
 Run the repo's actual test/lint commands (see root CLAUDE.md / AGENTS.md).
-Walk every FR/NFR from the plan against concrete evidence — fix anything
-unmet, or flag it explicitly.
+Walk every FR/NFR from the plan against concrete evidence (the test or code
+that guarantees it) — fix anything unmet, or flag it explicitly. Tests passing
+is necessary, not sufficient. Log it:
+`add_note` "Tests: PASS, N passed / M failed. Requirements: X/Y FR, A/B NFR met. <unmet ids>".
+If tests or a requirement are still failing after 2 fix attempts, stop and ask
+the user (night-shift would commit-and-flag; here a human is present). Never
+skip, disable, or delete a failing test to get green.
 
 ### 6. Review — self, then critic, both hunk-anchored
 
@@ -109,7 +115,10 @@ This is where "what does this code do, what are the risk factors, explain
 the critical pieces" gets captured — in the execution's review record,
 anchored to actual lines, not in a scratch file.
 
-**Self-review**: fix findings from your own read, re-run tests, then:
+**Self-review**: apply Clean Code + Sandi Metz (same two lenses night-shift
+uses; use the exact rule names in `selfReview`), implement the findings,
+re-run tests, store the combined markdown with `store_artifact`
+(`artifact_type: "review"`, never as files in the repo), then:
 ```
 Night Shift MCP -> store_review_report
   execution_id: <execution_id>
@@ -124,8 +133,17 @@ Night Shift MCP -> store_review_report
   diff:         [ { name, add, del, lines: [ { k: ctx|add|del, text,
                     annotation?: { summary, rationale?, confidence, tags? } }, ... ] }, ... ]
 ```
+Field shapes (incl. per-step `narration` and `diff` evidence pointer on
+`planCheck`/`selfReview`) are identical to night-shift's — see
+`../night-shift/references/review-report.md`. Keep the plan's numbered
+implementation-step labels stable; they become the `planCheck` rows.
+
 `diff.lines[].annotation` explains what a piece of code does and why —
 attach it to 1-3 non-obvious lines per file, not every line.
+
+Commit the self-review fixes **first** (`git add -A && git commit`), so the
+critic reviews, and `commit_sha` anchors to, what will actually ship — not a
+stale HEAD with uncommitted changes.
 
 **Critic pass** (independent, adversarial — correctness bugs, missing edge
 cases, migrations, security), anchored to the reviewed commit:
@@ -162,6 +180,8 @@ EOF
 )"
 ```
 Never force-push once the PR is open and someone (or CodeRabbit) may be reading it.
+Unlike night-shift (which pushes and never opens a PR), a watched run opens the
+PR itself.
 
 ```
 Night Shift MCP -> complete_execution
@@ -194,7 +214,8 @@ Night Shift MCP -> add_review_comment
   newRange:     [start, end]
   body:         "<why this change / what it protects against>"
 ```
-Commit naming the comment it resolves, push (no force-push), re-run
+Commit naming the comment it resolves, push (no force-push; if the push or
+completion fails, say so — never invent a ref), re-run
 `gh pr checks --watch`; loop until green or nothing addressable without a
 human decision. Stale/ambiguous comments: say so, don't guess.
 
@@ -213,4 +234,6 @@ execution record (plan + review + critic findings), anything left open.
 | Expose secrets/credentials in commits |
 | Run destructive DB migrations |
 | Expand a review comment into unrequested scope |
+| Write plan/review/summary files into the repo (use `store_artifact` / `summary_html`) |
+| Skip, disable, or delete a failing test to get green |
 | Call `claim_execution` / `get_queue` for this record (it must stay unqueued) |
