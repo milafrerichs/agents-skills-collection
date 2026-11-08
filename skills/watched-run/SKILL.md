@@ -89,9 +89,16 @@ break during TDD. End with GO / NO-GO and required changes if NO-GO."
 GO -> proceed. NO-GO -> revise once, re-store, re-review. Still NO-GO -> stop
 and flag to the user.
 
+Log the verdict on the record (same as night-shift) so a reviewer can tell an
+approved plan from an overridden one:
+```
+Night Shift MCP -> add_note
+  note: "Plan review: <GO|NO-GO|NO-GO x2, user chose to proceed>. <key findings>"
+```
+
 ### 4. Implement (TDD)
 
-Red -> Green -> Refactor per plan step, on a normal feature branch (no
+Follow the `tdd` skill: Red -> Green -> Refactor per plan step, on a normal feature branch (no
 worktree needed for a watched local run):
 ```bash
 git checkout -b <type>/<slug>   # e.g. feat/user-search-endpoint
@@ -101,7 +108,16 @@ git checkout -b <type>/<slug>   # e.g. feat/user-search-endpoint
 
 Run the repo's actual test/lint commands (see root CLAUDE.md / AGENTS.md).
 Walk every FR/NFR from the plan against concrete evidence — fix anything
-unmet, or flag it explicitly.
+unmet, or flag it explicitly. If tests fail or a requirement stays unmet after
+2 fix attempts, stop iterating and ask the user (the watched equivalent of
+night-shift's "commit what works and flag it").
+
+Log the outcome on the record:
+```
+Night Shift MCP -> add_note
+  note: "Tests: <PASS|FAIL>. <N> passed, <M> failed. Requirements: <X>/<Y> FR,
+         <A>/<B> NFR met. <unmet ids>"
+```
 
 ### 6. Review — self, then critic, both hunk-anchored
 
@@ -109,7 +125,18 @@ This is where "what does this code do, what are the risk factors, explain
 the critical pieces" gets captured — in the execution's review record,
 anchored to actual lines, not in a scratch file.
 
-**Self-review**: fix findings from your own read, re-run tests, then:
+**Self-review**: run the `clean-code` and `sandi-metz-reviewer` skills over the
+changed files (same two lenses night-shift uses), fix the findings, re-run
+tests, then store the combined review markdown on the record — never as a file
+in the repo:
+```
+Night Shift MCP -> store_artifact
+  execution_id:  <execution_id>
+  agent_id:      "watched-run-YYYYMMDD-NNN"
+  artifact_type: "review"
+  content:       <combined Clean Code + Sandi Metz review markdown>
+```
+and the structured self-assessment:
 ```
 Night Shift MCP -> store_review_report
   execution_id: <execution_id>
@@ -149,6 +176,7 @@ Empty `files: []` is a valid, honest clean review.
 ```bash
 git add -A && git commit -m "feat: <what> — <why>"
 git push -u origin <branch>
+PUSHED_SHA=$(git rev-parse HEAD)   # re-read AFTER the push
 gh pr create --title "<TECH-123> <title>" --body "$(cat <<'EOF'
 ## Summary
 <1-3 sentences>
@@ -162,6 +190,8 @@ EOF
 )"
 ```
 Never force-push once the PR is open and someone (or CodeRabbit) may be reading it.
+If the push fails, do not call `complete_execution` and never invent a ref —
+tell the user.
 
 ```
 Night Shift MCP -> complete_execution
@@ -169,8 +199,9 @@ Night Shift MCP -> complete_execution
   agent_id:      "watched-run-YYYYMMDD-NNN"
   branch:        "<branch>"
   commit_sha:    "$(git rev-parse HEAD)"
+  remote:        "origin"
   pushed_ref:    "<branch>"
-  pushed_sha:    "$(git rev-parse HEAD)"   # re-read AFTER push
+  pushed_sha:    "$PUSHED_SHA"
   worktree_path: "$(pwd)"
   summary_html:  <short self-contained HTML: what changed, link to PR>
 ```
@@ -211,6 +242,7 @@ execution record (plan + review + critic findings), anything left open.
 | Force-push a branch someone (or CodeRabbit) may be reading |
 | Delete or modify unrelated files |
 | Expose secrets/credentials in commits |
+| Write plan/review/summary files into the repo (use `store_artifact` / `summary_html`) |
 | Run destructive DB migrations |
 | Expand a review comment into unrequested scope |
 | Call `claim_execution` / `get_queue` for this record (it must stay unqueued) |
