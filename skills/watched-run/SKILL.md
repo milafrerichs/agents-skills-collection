@@ -1,12 +1,24 @@
 ---
 name: watched-run
-description: Default workflow for real implementation work in this repo — any time someone asks to build, implement, fix, add, or change functionality (not a one-off script), run this end-to-end in a watched (human-present) local session — plan, critical plan review, TDD implementation, self + critic review with hunk-anchored explanations recorded via Night Shift MCP (create_execution, never queued), PR, then iterate on CI + CodeRabbit comments until green. Trigger by default on implementation requests, not just explicit invocations ("work TECH-123 with me", "let's build this ticket now", "watched run on TECH-456", "implement X", "fix Y", "add Z"). Do NOT trigger for a standalone script or quick one-off ("write a script that...", a throwaway export/migration/utility not meant to ship as part of the product) — just write those directly, no plan/PR ceremony. If it's unclear which bucket a request falls into, ask once rather than guessing, and follow the user's answer. Do NOT use for the unattended overnight queue (that's the night-shift / feedback-shift skills) — this skill never calls get_queue, claim_execution, block_execution, or skip_execution.
+description: >
+  Default workflow for real implementation work in a watched (human-present)
+  local session: ticket, plan and critical plan review, TDD, early CodeRabbit
+  CLI review, independent Codex/Claude CLI reviews, hunk-anchored Night Shift
+  MCP records, PR, and CI/review iteration. Trigger on build, implement, fix,
+  add, or change-functionality requests and explicit watched-run invocations.
+  Exclude standalone scripts and throwaway utilities not meant to ship as
+  product functionality; if that boundary is unclear, ask once and follow
+  the answer. Do not use for unattended overnight queues (night-shift /
+  feedback-shift). Uses create_execution in record-only mode, never queue,
+  claim, block, or skip operations.
 ---
 
 # Watched Run
 
 A watched (human-present) single-ticket development session. Ticket content
-comes from Linear directly. Review comes from CI + CodeRabbit on a real PR.
+comes from Linear directly. Start CodeRabbit CLI review during implementation;
+require independent Codex and Claude CLI reviews before shipping (skip Claude
+when Claude is the producer), then follow CI + CodeRabbit on the PR.
 The Night Shift MCP is used only in its **record-only** mode
 (`create_execution`) to capture the plan and hunk-anchored explanations of
 what the code does and why — it never enters the autonomous queue.
@@ -35,10 +47,11 @@ opt-in. Concretely:
 1. TICKET    - Linear:get_issue(id) -> title, description, acceptance criteria, labels
 2. RECORD    - create_execution(linear_issue_id) -> execution_id (record-only, never queued)
 3. PLAN      - write implementation plan; store_artifact; critical subagent review (GO/NO-GO)
-4. IMPLEMENT - TDD: red -> green -> refactor
+4. IMPLEMENT - TDD: red -> green -> refactor; start CodeRabbit CLI on the first coherent diff
 5. VERIFY    - run tests/lint; confirm every FR/NFR is actually met
 6. REVIEW    - self-review; store_review_report with hunk-annotated explanations;
-               critic subagent -> store_critic_report with risk-flagged annotations
+               CodeRabbit + Codex + Claude CLI reviews (Claude skipped if producer)
+               -> store_critic_report with attributed, risk-flagged annotations
 7. SHIP      - commit, push, open a PR; complete_execution (record only, not a queue exit)
 8. CI/REVIEW - wait for CI + CodeRabbit; address every comment (add_review_comment
                type:"explain" for anything non-obvious you touch); repeat until green
@@ -69,7 +82,9 @@ queue effect until `complete_execution` at the end.
 
 Cover: 1. Goal · 2. Affected files · 3. Data/type changes · 4. Test strategy
 (TDD) · 5. Implementation steps · 6. Edge cases & risks · 7. Out of scope ·
-8. Requirements coverage (every FR/NFR -> step/test, or explicitly out of scope).
+8. Requirements coverage (every ticket FR/NFR -> implementation step and verification evidence).
+Do not mark a ticket requirement out of scope without an explicit scope change
+from the user.
 
 ```
 Night Shift MCP -> store_artifact
@@ -91,6 +106,11 @@ and flag to the user.
 
 ### 4. Implement (TDD)
 
+Read [references/cli-reviews.md](references/cli-reviews.md) and check the
+required CLIs before implementing. Start CodeRabbit CLI as soon as the first
+coherent implementation diff exists; collect findings while continuing work.
+Do not defer it until verification, push, or PR creation.
+
 Red -> Green -> Refactor per plan step, on a normal feature branch (no
 worktree needed for a watched local run):
 ```bash
@@ -100,10 +120,35 @@ git checkout -b <type>/<slug>   # e.g. feat/user-search-endpoint
 ### 5. Verify
 
 Run the repo's actual test/lint commands (see root CLAUDE.md / AGENTS.md).
-Walk every FR/NFR from the plan against concrete evidence — fix anything
-unmet, or flag it explicitly.
+When a ticket is associated with the work, verify every functional requirement
+(FR) and non-functional requirement (NFR) from that ticket against concrete
+evidence. Fix anything unmet; if a requirement cannot be met or verified, report
+the blocker and do not ship or mark the work complete.
 
-### 6. Review — self, then critic, both hunk-anchored
+Record each requirement's status and supporting evidence in the execution's
+review report. Once all are verified, explicitly note: "All functional and
+non-functional requirements of <ticket ID> are met." Include this confirmation
+in the PR description and final report, and recheck it after review fixes.
+
+#### Exercise the changed code in a sandbox
+
+Always run the changed code in an isolated sandbox with synthetic test data
+as part of verification. Exercise the actual entry point affected by the
+change (for example, the UI flow, API endpoint, CLI command, or background
+job), covering the intended behavior and relevant edge and failure cases.
+Passing automated tests or reading the code alone does not satisfy this step.
+
+Record the sandbox setup, test data, actions or commands, expected and observed
+results, and relevant FR/NFR coverage using `store_artifact` on the execution.
+Include failures and verification gaps; if the sandbox cannot run or behavior
+cannot be verified, report the blocker and do not ship or claim completion.
+Repeat affected scenarios after review fixes.
+
+Keep the sandbox, temporary data, logs, screenshots, and verification records
+outside the repository and worktree. Do not stage or commit them; retain the
+verification record on the execution and link it in the final report.
+
+### 6. Review — self and independent CLI reviews, all hunk-anchored
 
 This is where "what does this code do, what are the risk factors, explain
 the critical pieces" gets captured — in the execution's review record,
@@ -127,8 +172,13 @@ Night Shift MCP -> store_review_report
 `diff.lines[].annotation` explains what a piece of code does and why —
 attach it to 1-3 non-obvious lines per file, not every line.
 
-**Critic pass** (independent, adversarial — correctness bugs, missing edge
-cases, migrations, security), anchored to the reviewed commit:
+**Independent CLI reviews:** follow
+[references/cli-reviews.md](references/cli-reviews.md): CodeRabbit plus a fresh
+Codex CLI review and a fresh Claude CLI review, unless Claude produced the
+code. Commit the candidate before reviewing, resolve findings, and obtain
+reviews of the final candidate before shipping. Store full outputs as review
+artifacts and consolidate attributed findings under the distinct critic ID,
+anchored to the reviewed commit:
 ```
 Night Shift MCP -> store_critic_report
   execution_id: <execution_id>
@@ -146,8 +196,14 @@ Empty `files: []` is a valid, honest clean review.
 
 ### 7. Ship
 
+Ship only after every ticket FR/NFR is verified as met, the confirmation is
+recorded, the required CLI reviews complete, and actionable findings are
+resolved. If the commit below changes the reviewed candidate, repeat the
+final reviews before pushing.
+
 ```bash
-git add -A && git commit -m "feat: <what> — <why>"
+git add -A
+git diff --cached --quiet || git commit -m "feat: <what> — <why>"
 git push -u origin <branch>
 gh pr create --title "<TECH-123> <title>" --body "$(cat <<'EOF'
 ## Summary
@@ -194,13 +250,15 @@ Night Shift MCP -> add_review_comment
   newRange:     [start, end]
   body:         "<why this change / what it protects against>"
 ```
-Commit naming the comment it resolves, push (no force-push), re-run
+Commit naming the comment it resolves, repeat the final CLI reviews on the
+new candidate before pushing, push (no force-push), re-run
 `gh pr checks --watch`; loop until green or nothing addressable without a
 human decision. Stale/ambiguous comments: say so, don't guess.
 
 ### 9. Report
 
-What was built, PR link, CI status, comments addressed, pointer to the
+What was built, PR link, CI status, comments addressed, CLI reviewer statuses
+(and any Claude-producer exception), pointer to the
 execution record (plan + review + critic findings), anything left open.
 
 ## Guardrails (always)
