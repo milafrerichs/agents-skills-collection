@@ -84,13 +84,15 @@ produced the execution.
                  → update_progress(planning) + add_note(plan review result)
    c. BRANCH   - Create git worktree on a fresh branch (rework: reuse prior
                  branch/worktree instead)
-   d. IMPLEMENT- TDD: write failing tests first, then code to pass them
+   d. IMPLEMENT- TDD: write failing tests first, then code to pass them;
+                 start CodeRabbit CLI at the first coherent implementation diff
                  → update_progress(tdd) then update_progress(implement)
    e. VERIFY   - Run tests / lint; walk every FR/NFR against evidence; iterate
                  if failing → update_progress(verify) + add_note(test summary)
    f. REVIEW   - Clean Code + Sandi Metz review; implement all findings;
                  store_artifact(review) + store_review_report (self);
-                 independent critic subagent → store_critic_report
+                 CodeRabbit + Codex + Claude CLI reviews (skip Claude if producer)
+                 → store_critic_report with attributed findings
                  → update_progress(review)
    g. COMMIT   - Commit, PUSH the branch (no PR), record the pushed ref
                  → update_progress(commit) → complete_execution(branch,
@@ -189,6 +191,10 @@ coverage section (3b), the verify checklist (3e), and the `requirements` field
 of the review report (3f). Only fall back to the description's acceptance
 criteria when the spec has no FR/NFR sections.
 
+Read [references/cli-reviews.md](references/cli-reviews.md) for the required
+CLI reviews. Identify the producer and check required CLI availability/auth
+inside this task's repository after resolving its environment.
+
 Now run the **per-task environment check (Step 2)** — `cd` into this
 execution's `local_path_hint` and resolve `BASE_BRANCH` before planning. Do
 this for every task; the queue may span repos.
@@ -260,7 +266,9 @@ Night Shift MCP → store_artifact
   content: "## Feedback response\n- Feedback: <quote> → Change: <what you'll do>\n..."
 ```
 
-5. **Make the change, then verify + review + complete** (3e, 3f, 3g as
+5. **Start CodeRabbit CLI on the first coherent feedback diff** per
+   [references/cli-reviews.md](references/cli-reviews.md), then collect findings
+   while continuing the changes. **Verify + review + complete** (3e, 3f, 3g as
    normal). In 3f: `planCheck` gets one entry per feedback item (`step` = a
    short quote of the feedback, `status` = `match` if addressed or
    `diverged` if not); note in `selfReview` that this round addressed
@@ -297,9 +305,10 @@ Produce a detailed implementation plan covering:
 6. Edge cases & risks — anything that could go wrong; how to handle it
 7. Out of scope — explicit list of what will NOT be touched
 8. Requirements coverage — every FR and NFR id mapped to the step(s) and
-   test(s) that satisfy it. Anything not intended to be satisfied is called
-   out here as blocked or out of scope. A silently dropped requirement is the
-   most expensive failure mode a human reviewer can hit in the morning.
+   test(s) or other verification evidence that satisfy it. All functional and
+   non-functional ticket requirements must be met before completion; do not
+   mark any out of scope without an explicit scope change from the user.
+   Record any requirement that cannot be met or verified as a blocker.
 
 Keep the numbered step labels from item 5 stable — they become the
 `planCheck` rows in 3f.
@@ -356,6 +365,10 @@ All work for this task happens inside WORKTREE_PATH. Never commit to main.
 
 ### 3d. Implement (TDD)
 
+Start CodeRabbit CLI at the first coherent implementation diff using
+[references/cli-reviews.md](references/cli-reviews.md). Collect and address
+findings while implementing; do not wait for full verification or a push.
+
 Signal TDD phase:
 
 ```
@@ -410,6 +423,13 @@ Green tests are necessary, not sufficient: walk the FR/NFR list from 3a
 explicitly and point at concrete evidence (the test that exercises it, or the
 code that guarantees it) for each one.
 
+For every associated ticket, all functional and non-functional requirements
+must be verified as met, including during feedback iterations. Record each
+requirement's status and evidence in the execution note below. Only once all
+are verified, explicitly add: "All functional and non-functional requirements
+of <ticket ID> are met." Include the same confirmation in `summary_html` and
+the morning report, and recheck it after review fixes.
+
 Log the outcome:
 
 ```
@@ -418,11 +438,13 @@ Night Shift MCP → add_note
          Requirements: <X>/<Y> FR met, <A>/<B> NFR met. <unmet ids>"
 ```
 
-If tests fail, or a requirement stays unmet, after 2 fix attempts: commit what
-works, add_note with the details, flag in morning report under Issues
-Encountered, continue.
+If tests fail, or a requirement stays unmet or cannot be verified, after 2 fix
+attempts: commit what works, add_note with the details and unmet/unverified
+requirement IDs, call `block_execution`, flag in the morning report under
+Issues Encountered, and continue to the next task. Do not call
+`complete_execution` or claim all requirements are met.
 
-### 3f. Review — self, then critic, both hunk-anchored
+### 3f. Review — self and independent CLI reviews, all hunk-anchored
 
 Signal review phase:
 
@@ -471,18 +493,14 @@ git add -A
 git commit -m "refactor: apply clean-code + Sandi Metz review findings"
 ```
 
-**Critic pass** — an independent adversarial second opinion, not the same
-agent grading its own work. Spawn a subagent (default model: Opus; use
-whichever the user has indicated otherwise):
-
-> You are a senior engineer doing an adversarial post-implementation review.
-> You did NOT write this code. Find real defects: correctness bugs, missing
-> edge cases, risky migrations, security issues. Anchor every finding to a
-> file and a line range.
-
-Send `git diff origin/$BASE_BRANCH..HEAD` plus a request for per-file
-findings with a `[start, end]` line range, severity (`blocker`/`warn`/`nit`),
-summary, optional rationale, an overall summary, and a verdict.
+**Independent CLI reviews** — follow
+[references/cli-reviews.md](references/cli-reviews.md) for CodeRabbit plus a
+fresh Codex CLI review and a fresh Claude CLI review (skip Claude only when
+Claude produced the code). These are additional to the self-review checks
+above. Review the full task diff on an unchanged committed candidate, resolve
+findings, and re-review the final candidate after fixes. Store full outputs
+and dispositions as review artifacts. Consolidate attributed findings under
+the distinct critic ID, anchored to the final reviewed commit:
 
 ```
 Night Shift MCP → store_critic_report
@@ -496,6 +514,11 @@ Night Shift MCP → store_critic_report
 ```
 
 ### 3g. Commit & Complete
+
+Complete only after every ticket FR/NFR is verified as met, the confirmation
+is recorded, the required CLI reviews finish, and actionable findings are
+resolved. If final cleanup changes the reviewed candidate, repeat final
+CLI reviews before pushing and use that reviewed SHA for completion.
 
 Signal commit phase:
 
@@ -544,7 +567,8 @@ finds nothing to check out.
 Generate a self-contained HTML summary (no external deps, inline CSS,
 `prefers-color-scheme`, no relative links — there's no PR yet to link to)
 covering: header with task title/date/Linear link, plan review verdict,
-per-file change table, test results, requirements coverage, known issues.
+per-file change table, test results, requirements coverage, CLI reviewer
+statuses (including any Claude-producer exception), known issues.
 Template and exact expectations are in
 [`references/review-report.md`](references/review-report.md). Pass it
 directly to `complete_execution` — do not commit it into the worktree; a
@@ -603,6 +627,10 @@ BLOCKED (K)
 ISSUES ENCOUNTERED
   [TECH-124]: tests failing (redis mock); committed as-is, see worktree
 
+CLI REVIEWS
+  [TECH-123]: CodeRabbit + Codex + Claude completed on <SHA>; findings resolved
+  [TECH-121]: CodeRabbit + Codex completed on <SHA>; Claude skipped (producer)
+
 Next steps for reviewer:
   1. Open the execution in the Night Shift dashboard for the plan, self-review,
      and critic findings (same views as watched-run / work-shift executions)
@@ -620,8 +648,9 @@ Next steps for reviewer:
 | claim returns "already claimed" | — | Move to next execution |
 | No spec / empty acceptance criteria | skip_execution(reason "needs spec") | Log in report |
 | Opus plan review NO-GO twice | block_execution(reason) | Log in report |
-| Tests fail after 2 retries | add_note(failure details) | Flag in report ⚠️ |
-| Requirement unmet after 2 attempts | add_note(unmet ids) | Flag in report ⚠️ |
+| Tests fail after 2 retries | add_note(failure details) + block_execution(reason) | Flag in report; do NOT complete |
+| Requirement unmet or unverified after 2 attempts | add_note(requirement ids + evidence gaps) + block_execution(reason) | Flag in report; do NOT complete |
+| Required CLI review unavailable or incomplete | block_execution(review failure) | Record reviewer/error; do NOT complete |
 | Push fails | block_execution(push error) | Do NOT complete; never invent a ref |
 | Rate limits / timeouts | add_note("retrying") | Pause 30s, retry once |
 | Worktree dir already exists | — | git worktree remove --force, recreate |
