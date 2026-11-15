@@ -33,7 +33,7 @@ differences all follow from *where* this runs and *how the work arrives*:
 | Enters the overnight queue | yes | **no** — recorded work only |
 | Scope | whole queue, may span repos | exactly one ticket, one repo |
 | Isolation | git worktree per task | branch in the sandbox checkout |
-| Ends with | local worktree, no push | **branch pushed to origin, no PR** |
+| Ends with | worktree, **branch pushed to origin, no PR** | branch pushed to origin, no PR |
 | Human | asleep | **present throughout — blocked decisions escalate to them** |
 
 `create_execution` exists precisely for this: it records work against a Linear

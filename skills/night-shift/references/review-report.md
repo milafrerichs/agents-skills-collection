@@ -221,6 +221,10 @@ is no PR yet, so there's nowhere for a relative link to resolve to.
 <h2>Requirements Coverage</h2>
 <p>4/4 FR, 2/2 NFR met.</p>
 
+<h2>CLI Reviews</h2>
+<p>CodeRabbit + Codex + Claude completed on <code>&lt;SHA&gt;</code>; findings
+   resolved. (Note any Claude-producer exception here.)</p>
+
 <h2>Test Results</h2>
 <p>PASS — 24 tests, 0 failed — npm test</p>
 <pre>…last 10 lines of output…</pre>
