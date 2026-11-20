@@ -35,7 +35,8 @@ reading a local todo.md for the queue — always use get_queue first.
 |---|---|
 | get_queue | Once at startup — fetches ready executions from Linear |
 | claim_execution | Before touching any task — atomic lock |
-| get_issue_spec | Immediately after claiming — loads full Linear issue + FR/NFR. Also reports `is_rework` + reviewer `feedback` + the previous branch/worktree when the item was re-queued — see "Feedback Iteration Mode" (3a-rework) |
+| get_issue_spec | Immediately after claiming — loads full Linear issue + the FR/NFR requirements snapshot (`requirements_source`, `spec_drift`). Also reports `is_rework` + reviewer `feedback` + the previous branch/worktree when the item was re-queued — see "Feedback Iteration Mode" (3a-rework) |
+| record_requirement_status | In 3e, once per FR/NFR id **as you verify it** — never batched at the end. Ids must come from the snapshot |
 | spec_ticket | Under-specified ticket, interactive mode only — starts a Socratic spec session and returns the session link |
 | get_spec_skill | To load the ticket-to-spec methodology before calling spec_ticket |
 | update_progress | At every phase transition |
@@ -54,10 +55,10 @@ The critic pass uses a distinct id: `night-shift-critic-YYYYMMDD-NNN` — same
 reason as `watched-run`/`work-shift`: same id makes it a self-review wearing a
 costume, and the dashboard can no longer tell the two apart.
 
-`create_execution`, `submit_spec`, `add_review_comment`, `mark_feedback_applied`,
-`get_review_skill`, and `get_feedback_skill` belong to adjacent roles
-(watched-run/work-shift's ad-hoc recording, the spec-session flow, morning
-review, and feedback-shift) — night-shift itself never calls them.
+`create_execution`, `derive_requirements`, `submit_spec`, `add_review_comment`,
+`mark_feedback_applied`, `get_review_skill`, and `get_feedback_skill` belong to
+adjacent roles (watched-run/work-shift's ad-hoc recording, the spec-session
+flow, morning review, and feedback-shift) — night-shift itself never calls them.
 
 Field shapes for `store_review_report` / `store_critic_report` / `summary_html`
 are in [`references/review-report.md`](references/review-report.md) — read it
@@ -88,7 +89,9 @@ produced the execution.
                  start CodeRabbit CLI at the first coherent implementation diff
                  → update_progress(tdd) then update_progress(implement)
    e. VERIFY   - Run tests / lint; walk every FR/NFR against evidence; iterate
-                 if failing → update_progress(verify) + add_note(test summary)
+                 if failing → update_progress(verify)
+                 → record_requirement_status per FR/NFR id as it is verified
+                 → add_note(test summary + requirements tally)
    f. REVIEW   - Clean Code + Sandi Metz review; implement all findings;
                  store_artifact(review) + store_review_report (self);
                  CodeRabbit + Codex + Claude CLI reviews (skip Claude if producer)
@@ -97,7 +100,7 @@ produced the execution.
    g. COMMIT   - Commit, PUSH the branch (no PR), record the pushed ref
                  → update_progress(commit) → complete_execution(branch,
                    commit_sha, worktree_path, remote, pushed_ref, pushed_sha,
-                   summary_html)
+                   summary_html) → check the returned requirement_gaps is empty
 3. REPORT      - Print morning summary: branches pushed, tasks skipped/blocked
 ```
 
@@ -191,6 +194,19 @@ coverage section (3b), the verify checklist (3e), and the `requirements` field
 of the review report (3f). Only fall back to the description's acceptance
 criteria when the spec has no FR/NFR sections.
 
+The list is a **snapshot** the server took when you claimed, so it stays fixed
+for the run — its ids are the only ones `record_requirement_status` (3e)
+accepts. If the ticket was edited since, `spec_drift` lists the added /
+removed / reworded ids: keep working against the snapshot and call the drift
+out in the review report's `outro`. A bullet without an id gets a generated
+one (`FR-U1`, `NFR-U1`); use it exactly as returned.
+
+If `requirements_source` is `"none"`, the ticket has no FR/NFR sections and
+the snapshot is empty — there is nothing to record per id. Do **not** call
+`derive_requirements` (it is for attended, record-only runs). Verify against
+the description's acceptance criteria and say in the 3e `add_note` that no
+requirements snapshot existed.
+
 Read [references/cli-reviews.md](references/cli-reviews.md) for the required
 CLI reviews. Identify the producer and check required CLI availability/auth
 inside this task's repository after resolving its environment.
@@ -273,8 +289,10 @@ Night Shift MCP → store_artifact
    short quote of the feedback, `status` = `match` if addressed or
    `diverged` if not); note in `selfReview` that this round addressed
    feedback rather than the original plan; annotate `diff` lines that
-   directly resolve a feedback item. In 3g, push the same branch/worktree you
-   worked in — **a rework that is never pushed cannot be reviewed or picked
+   directly resolve a feedback item. In 3e, record **every** snapshot id
+   again with `record_requirement_status` — statuses are read per round,
+   so ids left unrecorded in this round show up as `missing`. In 3g, push
+   the same branch/worktree you worked in — **a rework that is never pushed cannot be reviewed or picked
    up for feedback from another machine.** Report the item under "REWORKED"
    in the morning report.
 
@@ -424,11 +442,42 @@ explicitly and point at concrete evidence (the test that exercises it, or the
 code that guarantees it) for each one.
 
 For every associated ticket, all functional and non-functional requirements
-must be verified as met, including during feedback iterations. Record each
-requirement's status and evidence in the execution note below. Only once all
-are verified, explicitly add: "All functional and non-functional requirements
-of <ticket ID> are met." Include the same confirmation in `summary_html` and
-the morning report, and recheck it after review fixes.
+must be verified as met, including during feedback iterations.
+
+**Record each requirement on the server as you verify it** — one call per
+id, straight after checking it, never batched at the end. A run that dies
+mid-verify then leaves a true partial record instead of nothing:
+
+```
+Night Shift MCP → record_requirement_status
+  agent_id:       "night-shift-<timestamp>"
+  execution_id:   <execution_id>
+  requirement_id: "FR-001"          # an id from the get_issue_spec snapshot
+  status:         met | partial | unmet | not_verifiable | descoped
+  note:           "<why — required for anything but met>"
+  commit_sha:     "$(git rev-parse HEAD)"
+  anchors:        [ { file: "src/search.ts", newRange: [12, 30] } ]
+  evidence:       [ { kind: test | command | code | manual,
+                      ref: "tests/search.test.ts › paginates past 100 rows",
+                      note?: "<optional>" } ]
+```
+
+- `anchors` point at where the code satisfies it (new-file line ranges);
+  `evidence` is what proves it — prefer a test name, then a command, then a
+  code ref; `manual` only when nothing automatable exists.
+- `partial` / `unmet` / `not_verifiable` are honest records, not failures to
+  hide — record them before acting on them (fix attempts or block below).
+- `descoped` only when the ticket itself puts the requirement out of scope.
+  It needs human approval and counts as a gap until then; never use it to
+  get past a requirement you could not meet.
+- Calls are appended; the latest call per id in the current round wins, so
+  re-record an id after a fix changes its status or evidence. The server
+  marks every snapshot id with no status as `missing`.
+
+Only once every id is recorded `met`, explicitly add: "All functional and
+non-functional requirements of <ticket ID> are met." Include the same
+confirmation in `summary_html` and the morning report, and recheck it — and
+re-record any id whose evidence moved — after review fixes.
 
 Log the outcome:
 
@@ -590,6 +639,14 @@ Night Shift MCP → complete_execution
   summary_html:  <self-contained HTML — see references/review-report.md>
 ```
 
+The response includes `requirement_gaps` — snapshot ids that are `missing`,
+`unmet`, or `descoped`. It does not block completion, but since this skill
+only completes once every requirement is met, it must come back empty apart
+from ids the ticket itself descoped (awaiting human approval). If it does
+not, you skipped a `record_requirement_status` call or recorded the
+wrong status: record the missing ids now, `add_note` what happened, and list
+the task under ISSUES ENCOUNTERED in the morning report.
+
 ---
 
 ## Step 4 — Morning Report
@@ -649,7 +706,9 @@ Next steps for reviewer:
 | No spec / empty acceptance criteria | skip_execution(reason "needs spec") | Log in report |
 | Opus plan review NO-GO twice | block_execution(reason) | Log in report |
 | Tests fail after 2 retries | add_note(failure details) + block_execution(reason) | Flag in report; do NOT complete |
-| Requirement unmet or unverified after 2 attempts | add_note(requirement ids + evidence gaps) + block_execution(reason) | Flag in report; do NOT complete |
+| Requirement unmet or unverified after 2 attempts | record_requirement_status(unmet / partial / not_verifiable + note) + add_note(requirement ids + evidence gaps) + block_execution(reason) | Flag in report; do NOT complete |
+| record_requirement_status rejects an id | — | Re-read the snapshot from get_issue_spec; use its ids verbatim, never ids from the live ticket |
+| complete_execution returns non-empty requirement_gaps | record the missing ids + add_note | Flag under ISSUES ENCOUNTERED |
 | Required CLI review unavailable or incomplete | block_execution(review failure) | Record reviewer/error; do NOT complete |
 | Push fails | block_execution(push error) | Do NOT complete; never invent a ref |
 | Rate limits / timeouts | add_note("retrying") | Pause 30s, retry once |

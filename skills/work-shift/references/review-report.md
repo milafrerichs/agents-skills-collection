@@ -51,8 +51,14 @@ Plain strings, one per acceptance criterion, keeping the id prefix:
 `"FR-001: The system MUST …"`, `"NFR-001: …"`. Source them from the
 `functional_requirements` / `non_functional_requirements` arrays returned by
 `get_issue_spec` — the same list covered in the plan and confirmed in verify.
-Only fall back to the description's acceptance criteria when the spec has no
-FR/NFR sections.
+When the ticket had none, these are the `agent_derived` ones stored with
+`derive_requirements` (`FR-U1…`); never mix in criteria that were not stored.
+
+This field is the human-readable checklist. The per-requirement status,
+evidence, and anchors live in the `record_requirement_status` calls made in
+Step 6 — that is the record `complete_execution` computes `requirement_gaps`
+from. Keep the two consistent: every id listed here should have a recorded
+status.
 
 ### planCheck[]
 
@@ -221,6 +227,11 @@ Support `prefers-color-scheme`.
 
 <details><summary>Plan</summary><pre>…full plan markdown…</pre></details>
 <details><summary>Code Reviews</summary><pre>…combined review markdown…</pre></details>
+
+<h2>Requirements Coverage</h2>
+<p>4/4 FR, 2/2 NFR met (source: ticket). Gaps: none.</p>
+<!-- If requirements were agent_derived, say so. List every requirement_gaps id
+     with its recorded status and note. -->
 
 <h2>Test Results</h2>
 <p>PASS — 24 tests, 0 failed — npm test</p>
