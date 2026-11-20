@@ -96,13 +96,15 @@ agent having guessed.
 ```
 0. RESOLVE   - Ticket ID + repo context + base branch
 1. RECORD    - create_execution → execution_id (claim it if the server wants one)
-2. SPEC      - get_issue_spec → FR/NFR checklist; confirm scope with the user
+2. SPEC      - get_issue_spec → FR/NFR snapshot (derive_requirements if the
+               ticket has none); confirm scope with the user
 3. PLAN      - 8-part plan → store_artifact(plan) → Fable plan review → GO/NO-GO
 4. BRANCH    - work-shift/<slug> off origin/<base>
 5. IMPLEMENT - TDD red → green → refactor
-6. VERIFY    - tests + lint + explicit FR/NFR confirmation
+6. VERIFY    - tests + lint + record_requirement_status per FR/NFR id
 7. REVIEW    - Clean Code + Sandi Metz → store_artifact(review) + store_review_report
 8. SHIP      - commit, push branch, critic pass → complete_execution(summary_html)
+               → check requirement_gaps
 9. HANDOFF   - print the report
 ```
 
@@ -188,9 +190,39 @@ contract for the whole run** — it drives the plan's coverage section (Step 3),
 the verify checklist (Step 6), and the `requirements` field of the review report
 (Step 7). Treat it as authoritative over your own reading of the description.
 
+The list is a **snapshot** taken when the execution started, not the live
+ticket — its ids are the only ones `record_requirement_status` (Step 6)
+accepts. If the ticket was edited since, `spec_drift` lists the added /
+removed / reworded ids: keep working against the snapshot, tell the user, and
+call the drift out in the review report's `outro`. Bullets without an id get a
+generated one (`FR-U1`); use ids exactly as returned.
+
 If `is_rework` is true, the reviewer already sent this back. Read
 `references/rework-mode.md` and follow it instead of Steps 3–5 — you are
 addressing feedback on existing work, not rebuilding it.
+
+### No requirements on the ticket → derive them
+
+When `requirements_source` is `"none"` the ticket has no Functional /
+Non-Functional Requirements sections, so there is nothing to verify per id.
+This is a record-only run, so write the requirements yourself and store them —
+from the acceptance criteria, the description, or the answers and assumptions
+gathered under "Under-specified tickets" below:
+
+```
+Night Shift MCP → derive_requirements
+  agent_id:       "work-shift-YYYYMMDD-NNN"
+  execution_id:   <execution_id>
+  functional:     [ "The search endpoint MUST return at most 50 results per page", ... ]
+  non_functional: [ "p95 latency MUST stay under 300ms on the staging dataset", ... ]
+```
+
+They are stored with source `agent_derived` and ids `FR-U1…` / `NFR-U1…`.
+Show the derived list to the user in the scope confirmation below **before**
+calling it — derived requirements are your reading of the ticket, and the
+human present is the one who can correct it. Then re-call `get_issue_spec` to
+pick up the stored ids. The server rejects the call when the ticket has its
+own requirements; never use it to replace or extend those.
 
 ### Under-specified tickets
 
@@ -209,8 +241,9 @@ above are still open.
 
 1. Open an interactive spec session (spec_ticket) and block this run until
    the ticket is specced
-2. Proceed on assumptions I state explicitly in the plan and record via
-   add_note — the plan review will be reading a guess, not a spec
+2. Proceed on assumptions I state explicitly in the plan, record via
+   add_note, and store as derived requirements (derive_requirements) — the
+   plan review will be reading a guess, not a spec
 3. Stop here
 ```
 
@@ -228,7 +261,8 @@ Agent:    work-shift-YYYYMMDD-NNN
 Ticket:   [TECH-123] Add user search endpoint
 Repo:     equimatch-api (base: main)
 Exec:     <execution_id>
-Requirements: 4 FR, 2 NFR
+Requirements: 4 FR, 2 NFR  (source: ticket | agent_derived — list them if derived)
+Spec drift:   none | <added/removed/reworded ids>
 
 Proceed? (y / adjust scope / n)
 ```
@@ -383,6 +417,36 @@ auditability are routinely uncovered by unit tests. For each requirement, point
 at the concrete evidence: the test that exercises it or the code that guarantees
 it.
 
+**Record each requirement on the server as you verify it** — one call per id,
+straight after checking it, never batched at the end. If the sandbox dies
+mid-verify, what was already recorded survives:
+
+```
+Night Shift MCP → record_requirement_status
+  agent_id:       "work-shift-YYYYMMDD-NNN"
+  execution_id:   <execution_id>
+  requirement_id: "FR-001"          # an id from the get_issue_spec snapshot
+  status:         met | partial | unmet | not_verifiable | descoped
+  note:           "<why — required for anything but met>"
+  commit_sha:     "$(git rev-parse HEAD)"
+  anchors:        [ { file: "src/search.ts", newRange: [12, 30] } ]
+  evidence:       [ { kind: test | command | code | manual,
+                      ref: "tests/search.test.ts › paginates past 100 rows",
+                      note?: "<optional>" } ]
+```
+
+- `anchors` point at where the code satisfies it (new-file line ranges);
+  `evidence` is what proves it — prefer a test name, then a command, then a
+  code ref; `manual` only when nothing automatable exists.
+- `partial` / `unmet` / `not_verifiable` are honest records — make them before
+  fix attempts or escalation, not instead of them.
+- `descoped` needs human approval and counts as a gap until it is given. Use
+  it only when the ticket says the requirement is out of scope, or when the
+  user chose to descope it in an escalation (say so in `note`).
+- Calls are appended and the latest per id in the current round wins: after a
+  fix — including review fixes in Step 7 — re-record the ids whose status or
+  evidence changed. Every snapshot id left unrecorded is marked `missing`.
+
 ```
 Night Shift MCP → add_note
   note: "Tests: <PASS|FAIL>. <N> passed, <M> failed.
@@ -390,7 +454,9 @@ Night Shift MCP → add_note
 ```
 
 Treat an unmet requirement exactly like a failing test: two fix attempts, then
-record it and flag it in the handoff report rather than quietly shipping.
+record its final status (`unmet` / `partial` / `not_verifiable`, with a note)
+and escalate per "Escalate, do not terminate" — keep going with it recorded as
+a gap, descope it, or stop — rather than quietly shipping.
 
 ## Step 7 — Review
 
@@ -498,7 +564,12 @@ Night Shift MCP → complete_execution
   summary_html:  <self-contained HTML — see references/review-report.md>
 ```
 
-This flips the Linear issue to "In Review" and posts the branch details. The HTML
+This flips the Linear issue to "In Review" and posts the branch details. The
+response includes `requirement_gaps` — snapshot ids that are `missing`,
+`unmet`, or `descoped`. It does not block completion, so read it: a `missing`
+id means a `record_requirement_status` call was skipped (record it now); every
+remaining gap goes into the handoff's **Open items** and the `summary_html`
+known issues. The HTML
 is a narrative overview only: header, summary, plan review verdict, per-file
 change table, `git diff --stat`, collapsed `<details>` blocks embedding the plan
 and reviews, test results, known issues. It must be fully self-contained — no
@@ -517,7 +588,8 @@ Exec:    <execution_id>
 Branch:  work-shift/add-user-search-endpoint  (pushed → origin)
 Commit:  <sha>
 Tests:   PASS — 24 passed, 0 failed, 6 added
-Reqs:    4/4 FR, 2/2 NFR met
+Reqs:    4/4 FR, 2/2 NFR met  (source: ticket | agent_derived)
+Gaps:    none | <requirement_gaps from complete_execution>
 Self-confidence: 88   Critic: approve_with_nits (82)
 
 Recorded to Night Shift: plan, review, review report, critic report, HTML summary
@@ -551,7 +623,10 @@ passed.
 | No spec, questions unanswered | `spec_ticket` or `add_note`, per the answer | Ask (spec / assumptions / stop) |
 | Fable plan review NO-GO twice | `add_note`; `block_execution` *only if chosen* | Ask; record the decision |
 | Tests fail after 2 attempts | `add_note(details)` | Flag in handoff |
-| Requirement unmet after 2 attempts | `add_note(ids)` | Flag in handoff |
+| Ticket has no FR/NFR (`requirements_source: "none"`) | `derive_requirements` after the user confirms the list | Show derived list in scope confirmation |
+| Requirement unmet after 2 attempts | `record_requirement_status` (final status + note) + `add_note(ids)` | Ask (keep as gap / descope / stop); flag in handoff |
+| `record_requirement_status` rejects an id | — | Re-read the snapshot; use its ids verbatim |
+| `complete_execution` returns `requirement_gaps` | record any `missing` ids | List every gap in handoff Open items |
 | Push rejected / no credentials | `add_note` + `complete_execution` | Say branch is unpushed |
 | Rate limit or timeout | `add_note("retrying")` | Pause 30s, retry once |
 | Test suite needs unreachable service | per the answer | Ask (block / subset / stub) |

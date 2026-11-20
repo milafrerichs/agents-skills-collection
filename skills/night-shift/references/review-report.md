@@ -57,6 +57,12 @@ same list covered in the plan's requirements-coverage section (3b) and walked
 in verify (3e). Only fall back to the description's acceptance criteria when
 the spec has no FR/NFR sections.
 
+This field is the human-readable checklist. The per-requirement status,
+evidence, and anchors live in the `record_requirement_status` calls made
+during verify (3e) — that is the record `complete_execution` computes
+`requirement_gaps` from. Keep the two consistent: every id listed here should
+have a recorded status.
+
 ### planCheck[]
 
 One entry per numbered implementation step from the plan, in order.
@@ -219,7 +225,8 @@ is no PR yet, so there's nowhere for a relative link to resolve to.
 <pre>git diff --stat output</pre>
 
 <h2>Requirements Coverage</h2>
-<p>4/4 FR, 2/2 NFR met.</p>
+<p>4/4 FR, 2/2 NFR met (recorded via record_requirement_status).</p>
+<!-- If any id is not met, list it with its recorded status and note. -->
 
 <h2>Test Results</h2>
 <p>PASS — 24 tests, 0 failed — npm test</p>

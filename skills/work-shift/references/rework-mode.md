@@ -69,6 +69,16 @@ Night Shift MCP → store_artifact
 
 Add or adjust tests as the feedback requires, then continue with Step 6.
 
+## Re-record every requirement (Step 6)
+
+The requirements snapshot carries over from the earlier run, but the recorded
+statuses do not: the server reads `record_requirement_status` per round, so
+every snapshot id you leave unrecorded in this round comes back as `missing`
+in `complete_execution`'s `requirement_gaps`. Re-verify and re-record **all**
+of them — not only the ones the feedback touched — one call per id as you
+check it. Unchanged requirements are quick: re-run the evidence and record
+`met` against the new `commit_sha`.
+
 ## Review report adjustments (Step 7)
 
 Three changes to `store_review_report` so the reviewer sees a feedback round

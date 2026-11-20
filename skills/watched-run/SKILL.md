@@ -46,13 +46,16 @@ opt-in. Concretely:
 ```
 1. TICKET    - Linear:get_issue(id) -> title, description, acceptance criteria, labels
 2. RECORD    - create_execution(linear_issue_id) -> execution_id (record-only, never queued)
+               -> get_issue_spec -> FR/NFR snapshot (derive_requirements if the ticket has none)
 3. PLAN      - write implementation plan; store_artifact; critical subagent review (GO/NO-GO)
 4. IMPLEMENT - TDD: red -> green -> refactor; start CodeRabbit CLI on the first coherent diff
 5. VERIFY    - run tests/lint; confirm every FR/NFR is actually met
+               -> record_requirement_status per id as it is verified
 6. REVIEW    - self-review; store_review_report with hunk-annotated explanations;
                CodeRabbit + Codex + Claude CLI reviews (Claude skipped if producer)
                -> store_critic_report with attributed, risk-flagged annotations
 7. SHIP      - commit, push, open a PR; complete_execution (record only, not a queue exit)
+               -> check requirement_gaps
 8. CI/REVIEW - wait for CI + CodeRabbit; address every comment (add_review_comment
                type:"explain" for anything non-obvious you touch); repeat until green
 9. REPORT    - summarize what changed, link the PR + execution record, note open items
@@ -63,8 +66,9 @@ opt-in. Concretely:
 ```
 Linear:get_issue(id: "TECH-123", includeRelations: true)
 ```
-Treat the description + acceptance criteria as authoritative. If they're too
-thin to plan from, ask rather than guess — this is a watched run, a quick
+Treat the description + acceptance criteria as authoritative; the FR/NFR
+contract you verify against comes from `get_issue_spec` in step 2. If they're
+too thin to plan from, ask rather than guess — this is a watched run, a quick
 question is cheap.
 
 ### 2. Record (not queue)
@@ -77,6 +81,37 @@ Night Shift MCP -> create_execution
 Gives you an `execution_id` everything below attaches to. This is a
 history/reasoning record, never claimed by the overnight agent, with no
 queue effect until `complete_execution` at the end.
+
+Then load the requirements snapshot for the record:
+
+```
+Night Shift MCP -> get_issue_spec
+  execution_id: <execution_id>
+```
+
+`functional_requirements` / `non_functional_requirements` (each `{id, text}`)
+are the requirements contract for the run and the only ids
+`record_requirement_status` (step 5) accepts. They are a snapshot, not the
+live ticket: if `spec_drift` lists added / removed / reworded ids, keep working
+against the snapshot, tell the user, and mention the drift in the review
+report's `outro`. Use ids exactly as returned (unnumbered bullets get `FR-U1`
+style ids).
+
+**No requirements on the ticket.** When `requirements_source` is `"none"`,
+write them yourself from the acceptance criteria and description, show the
+list to the user, and once they confirm, store them:
+
+```
+Night Shift MCP -> derive_requirements
+  execution_id:   <execution_id>
+  agent_id:       "watched-run-YYYYMMDD-NNN"
+  functional:     [ "<testable behaviour the change MUST have>", ... ]
+  non_functional: [ "<performance / security / persistence constraint>", ... ]
+```
+
+They are stored as `agent_derived` with ids `FR-U1…` / `NFR-U1…`; re-call
+`get_issue_spec` to pick them up. The server rejects this when the ticket has
+its own requirements — never use it to replace or extend those.
 
 ### 3. Plan + plan review
 
@@ -125,10 +160,40 @@ When a ticket is associated with the work, verify every functional requirement
 evidence. Fix anything unmet; if a requirement cannot be met or verified, report
 the blocker and do not ship or mark the work complete.
 
-Record each requirement's status and supporting evidence in the execution's
-review report. Once all are verified, explicitly note: "All functional and
-non-functional requirements of <ticket ID> are met." Include this confirmation
-in the PR description and final report, and recheck it after review fixes.
+Record each requirement on the execution **as you verify it** — one call per
+id, straight after checking it, never batched at the end:
+
+```
+Night Shift MCP -> record_requirement_status
+  execution_id:   <execution_id>
+  agent_id:       "watched-run-YYYYMMDD-NNN"
+  requirement_id: "FR-001"          # an id from the get_issue_spec snapshot
+  status:         met | partial | unmet | not_verifiable | descoped
+  note:           "<why — required for anything but met>"
+  commit_sha:     "$(git rev-parse HEAD)"
+  anchors:        [ { file: "<repo-relative path>", newRange: [start, end] } ]
+  evidence:       [ { kind: test | command | code | manual,
+                      ref: "<test name / command / code ref / manual check>",
+                      note?: "<optional>" } ]
+```
+
+- `anchors` point at where the code satisfies it (new-file line ranges);
+  `evidence` is what proves it — prefer a test, then a command, then a code
+  ref; `manual` only when nothing automatable exists.
+- Record `partial` / `unmet` / `not_verifiable` honestly before fixing or
+  reporting the blocker — not instead of it.
+- `descoped` needs human approval and counts as a gap until given; use it only
+  when the ticket or the user explicitly puts the requirement out of scope,
+  and say which in `note`.
+- Calls are appended; the latest per id in the current round wins. Re-record
+  an id whenever a fix changes its status or evidence. Every snapshot id left
+  unrecorded is marked `missing`.
+
+Also list the FR/NFR strings in the review report's `requirements` field
+(step 6). Once every id is recorded `met`, explicitly note: "All functional
+and non-functional requirements of <ticket ID> are met." Include this
+confirmation in the PR description and final report, and recheck it after
+review fixes.
 
 ### 6. Review — self and independent CLI reviews, all hunk-anchored
 
@@ -213,6 +278,12 @@ Night Shift MCP -> complete_execution
   summary_html:  <short self-contained HTML: what changed, link to PR>
 ```
 
+The response includes `requirement_gaps` — snapshot ids that are `missing`,
+`unmet`, or `descoped`. It does not block completion, but since this run only
+ships once every requirement is met, it should be empty. A `missing` id means
+a `record_requirement_status` call was skipped: record it now. Report any
+remaining gap to the user rather than leaving it for the dashboard to surface.
+
 ### 8. Wait for CI + CodeRabbit, then address comments
 
 ```bash
@@ -232,14 +303,17 @@ Night Shift MCP -> add_review_comment
   newRange:     [start, end]
   body:         "<why this change / what it protects against>"
 ```
-Commit naming the comment it resolves, repeat the final CLI reviews on the
-new candidate before pushing, push (no force-push), re-run
+Commit naming the comment it resolves, re-run `record_requirement_status`
+for any requirement whose status or evidence the fix changed, repeat the
+final CLI reviews on the new candidate before pushing, push (no force-push), re-run
 `gh pr checks --watch`; loop until green or nothing addressable without a
 human decision. Stale/ambiguous comments: say so, don't guess.
 
 ### 9. Report
 
-What was built, PR link, CI status, comments addressed, CLI reviewer statuses
+What was built, PR link, CI status, comments addressed, requirements tally
+(`<X>/<Y> FR, <A>/<B> NFR met`, source ticket or agent_derived, any
+`requirement_gaps`), CLI reviewer statuses
 (and any Claude-producer exception), pointer to the
 execution record (plan + review + critic findings), anything left open.
 
