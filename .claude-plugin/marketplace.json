@@ -1,0 +1,18 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "agents-skills-collection",
+  "description": "Claude Code plugins built from this skills and agents collection.",
+  "owner": {
+    "name": "Mila Frerichs"
+  },
+  "plugins": [
+    {
+      "name": "watched-run",
+      "description": "Default workflow for human-present implementation work: Linear ticket, reviewed plan, TDD, CodeRabbit/Codex/Claude CLI reviews, Night Shift MCP record-only execution, PR and CI iteration.",
+      "source": "./skills/watched-run",
+      "strict": false,
+      "skills": ["./"],
+      "category": "development"
+    }
+  ]
+}

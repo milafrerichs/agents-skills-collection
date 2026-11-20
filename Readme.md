@@ -3,6 +3,38 @@
 A collection of Claude skills (`skills/`) and agents (`agents/`), served over MCP
 by the server in `mcp-server/`.
 
+## Claude Code plugins
+
+This repo is also a Claude Code plugin marketplace
+(`.claude-plugin/marketplace.json`). Installed as a plugin, a skill's
+description is always in context, so it triggers on its own instead of waiting
+for a `get_skill` call, and its `references/` files are read from disk.
+
+| Plugin        | Skill source            |
+|---------------|-------------------------|
+| `watched-run` | `skills/watched-run/`   |
+
+Install (Claude Code 2.1.275 or later):
+
+```
+/plugin install watched-run --marketplace milafrerichs/agents-skills-collection
+```
+
+Or in two steps:
+
+```
+/plugin marketplace add milafrerichs/agents-skills-collection
+/plugin install watched-run@agents-skills-collection
+```
+
+Plugins point at the same `skills/<name>/` directories the MCP server indexes,
+so there is one copy to edit. No `version` is set, so installs track the
+marketplace's git commit; pick up changes with `/plugin marketplace update
+agents-skills-collection`. Clients that can't install Claude Code plugins
+(Codex, claude.ai) keep using the MCP server.
+
+Check manifest changes with `claude plugin validate .`.
+
 ## Deploying to Railway
 
 `railway.json` builds the repository root with the root `Dockerfile`. The build
