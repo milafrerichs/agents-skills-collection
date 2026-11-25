@@ -3,8 +3,8 @@ name: watched-run
 description: >
   Default workflow for real implementation work in a watched (human-present)
   local session: ticket, baseline, red-proof E2E tests from a separate test
-  author, plan and critical plan review, E2E-driven implementation with
-  boundary-test validation, early CodeRabbit CLI review, independent Codex/Claude CLI reviews, hunk-anchored Night Shift
+  author, scenario-based plan and critical plan review, TDD implementation,
+  E2E + boundary-test verification, early CodeRabbit CLI review, independent Codex/Claude CLI reviews, hunk-anchored Night Shift
   MCP records, PR, and CI/review iteration. Trigger on build, implement, fix,
   add, or change-functionality requests and explicit watched-run invocations.
   Exclude standalone scripts and throwaway utilities not meant to ship as
@@ -18,10 +18,11 @@ description: >
 
 A watched (human-present) single-ticket development session. Ticket content
 comes from Linear directly. Testing follows
-[references/e2e-contract.md](references/e2e-contract.md): E2E tests (one per
-acceptance scenario, written and committed by a separate test author before
-implementation) drive the work, boundary tests validate it, unit tests are
-optional. That contract wins over anything below or in AGENTS.md that
+[references/e2e-contract.md](references/e2e-contract.md). E2E acceptance
+scenarios define the work, organise the plan and verify the result. They are
+written and committed by a separate test author before implementation, one
+test per scenario. Implementation itself is TDD (red -> green -> refactor with
+unit/integration tests). Boundary tests validate every external boundary. That contract wins over anything below or in AGENTS.md that
 conflicts with it. Start CodeRabbit CLI review during implementation;
 require independent Codex and Claude CLI reviews before shipping (skip Claude
 when Claude is the producer), then follow CI + CodeRabbit on the PR.
@@ -57,8 +58,9 @@ opt-in. Concretely:
 4. E2E RED   - scenarios confirmed; separate test author (spec + base only, never the plan)
                commits one E2E test per scenario; each fails on an assertion -> RED_PROOF_SHA
 5. PLAN      - write implementation plan; store_artifact; critical subagent review (GO/NO-GO)
-6. IMPLEMENT - make E2E pass; boundary test per touched boundary; never edit E2E files;
-               fix loop stops after 2 rounds without fewer failures; CodeRabbit on first diff
+6. IMPLEMENT - TDD per plan step (red -> green -> refactor) toward the red E2E scenarios;
+               boundary test per touched boundary; never edit E2E files; fix loop stops
+               after 2 rounds without fewer failures; CodeRabbit on first diff
 7. VERIFY G3 - just e2e / just boundary / just verify on the final SHA, reported separately;
                hand checks; record_requirement_status per id as it is verified
 8. REVIEW    - self-review; store_review_report with hunk-annotated explanations;
@@ -157,9 +159,13 @@ raise a `TEST_DISPUTE` with evidence and stop. The author may revise it once.
 
 ### 5. Plan + plan review
 
+Organise the plan around the acceptance scenarios: each step names the
+scenario(s) it moves toward green.
+
 Cover: 1. Goal · 2. Affected files · 3. Data/type changes · 4. Test strategy
-(which red-proof E2E test each step turns green; the boundaries the change
-touches and the boundary test, fake or tape for each; optional unit tests) ·
+(which red-proof E2E scenario each step moves forward; the TDD unit/integration
+tests each step starts with; the boundaries the change touches and the
+boundary test, fake or tape for each) ·
 5. Implementation steps · 6. Edge cases & risks · 7. Out of scope ·
 8. Requirements coverage (every FR -> scenario id -> E2E test; every NFR ->
 implementation step and `tested` / `demonstrated` evidence).
@@ -185,21 +191,23 @@ boundary test. End with GO / NO-GO and required changes if NO-GO."
 GO -> proceed. NO-GO -> revise once, re-store, re-review. Still NO-GO -> stop
 and flag to the user.
 
-### 6. Implement (E2E-driven)
+### 6. Implement (TDD)
 
 Read [references/cli-reviews.md](references/cli-reviews.md) and check the
 required CLIs before implementing. Start CodeRabbit CLI as soon as the first
 coherent implementation diff exists; collect findings while continuing work.
 Do not defer it until verification, push, or PR creation.
 
-Work plan step by step on the branch from step 3 and turn the red-proof E2E
-tests green from the outside in:
+Work through the plan step by step on the branch from step 3. Use TDD:
+red -> green -> refactor with unit/integration tests for each step. The
+red-proof E2E scenarios are the outer target. Run `just e2e` after each step
+to see which scenarios now pass, but don't use them instead of the inner
+tests.
 
-- Add a boundary test for every external boundary the diff touches
-  (third-party API, DB, queue, storage). It checks the exact request against a
-  sandbox, fake or tape. The E2E tests use those same fakes and tapes.
-- Unit tests are optional support only. Use sandbox or test-mode credentials
-  only.
+- Build each external boundary the diff touches (third-party API, DB, queue,
+  storage) test-first too. Its boundary test checks the exact request against
+  a sandbox, fake or tape. The E2E tests use those same fakes and tapes.
+- Use sandbox or test-mode credentials only.
 - Never edit, skip or weaken an E2E test file. Raise `TEST_DISPUTE` instead.
 - **Fix loop:** after each round, log the number of failing tests. Keep going
   while it drops. After two rounds in a row without a drop, or when the
@@ -208,11 +216,12 @@ tests green from the outside in:
 ### 7. Verify (G3)
 
 On the final SHA, run each of these and report its result separately:
-`just e2e` (driver), `just boundary` (validation) and `just verify` (lint,
+`just e2e` (acceptance), `just boundary` (validation) and `just verify` (lint,
 build, unit). All three must pass. Then do the hand checks in
 [references/e2e-contract.md](references/e2e-contract.md#verify-g3):
 - `git diff "$RED_PROOF_SHA"..HEAD -- <E2E test files>` is empty;
 - each E2E test still exercises its full scenario;
+- new behaviour has its TDD unit/integration tests;
 - every boundary the diff touches has a boundary test.
 
 Store the three outputs and the hand-check results with `store_artifact`

@@ -1,16 +1,26 @@
-# Testing contract: E2E tests drive, boundary tests validate
+# Testing contract: E2E scenarios define and verify, TDD implements
 
-This contract governs how a watched run tests its work. Where it conflicts
-with other parts of the skill or with AGENTS.md (for example "Behaviour / E2E:
-use sparingly" or "Always use TDD" at the unit level), this contract wins.
+This contract governs how a watched run tests its work. The work is split
+into two loops:
+
+- **Outer loop (E2E):** scenarios, planning and verification. The acceptance
+  scenarios define what "done" means. The plan is organised around them, and
+  the work counts as verified only when their E2E tests pass.
+- **Inner loop (TDD):** implementation. Every plan step is built
+  red -> green -> refactor with unit and integration tests, as AGENTS.md
+  requires.
+
+Where this conflicts with other parts of the skill or with AGENTS.md (for
+example "Behaviour / E2E: use sparingly"), this contract wins. TDD for
+implementation stays required.
 
 ## Roles
 
 | Layer | Role | Rule |
 |---|---|---|
-| **E2E** | Primary driver | One test per acceptance scenario (Given/When/Then), named by its scenario id. It runs through the app's public entry point (HTTP, CLI or UI) against a real database. External services are replaced by fakes or tapes. |
+| **E2E** | Acceptance: scenarios, plan, verification | One test per acceptance scenario (Given/When/Then), named by its scenario id. It runs through the app's public entry point (HTTP, CLI or UI) against a real database. External services are replaced by fakes or tapes. |
 | **Boundary** | Validation stage | One test for each external boundary the change touches (third-party API, DB, queue, storage). It checks the exact request (method, path, headers, body) against a sandbox, fake or tape. |
-| **Unit** | Optional support | Only where it helps the implementer. It never stands in for an E2E or boundary test. |
+| **Unit / integration** | Implementation (TDD) | Written first, red -> green -> refactor, for each plan step. Tests all new public behaviour. It never stands in for an E2E or boundary test. |
 
 - E2E tests use the **same** fakes and tapes that the boundary tests verify,
   so a fake cannot drift away from the real API without a boundary test failing.
@@ -95,9 +105,9 @@ On the base, before the test author starts, run each command and keep each
 result separately:
 
 ```bash
-just e2e        # driver
+just e2e        # acceptance
 just boundary   # validation
-just verify     # lint, build, unit
+just verify     # lint, build, unit/integration
 ```
 
 All three must pass on the base. If one fails, stop and report it, because
@@ -107,14 +117,21 @@ you can't tell new failures from old ones.
 ask the user before adding it. Justfiles are tier 2: never change one without
 asking first.
 
-## Implementation and fix loop
+## Implementation (TDD) and fix loop
 
-- Make the E2E tests pass from the outside in. Add a boundary test for every
-  boundary the diff touches, built on the fakes and tapes the E2E tests use.
-  If a fake has to change, its boundary test must prove the new behaviour
-  matches the sandbox or tape.
-- After each fix round, count the failing tests across `just e2e` and
-  `just boundary` and log the count (`add_note`).
+- Implement each plan step with TDD: write a failing unit or integration test
+  (red), make it pass with the smallest change (green), then refactor. Commit
+  in small steps. Each step names the E2E scenario(s) it moves forward.
+- After each step, run `just e2e` to see which scenarios now pass. Treat the
+  red E2E tests as the outer target, not as a replacement for the inner
+  tests.
+- Build every boundary the diff touches test-first as well: write its boundary
+  test (exact method, path, headers, body), then the client code. Use the same
+  fakes and tapes the E2E tests use. If a fake has to change, its boundary
+  test must prove the new behaviour matches the sandbox or tape.
+- After each fix round, count the failing tests across `just e2e`,
+  `just boundary` and the unit/integration suite, and log the count
+  (`add_note`).
 - **Keep going while each round lowers the failure count.** After **two
   rounds in a row with no drop**, or when the wall-clock budget runs out, stop.
   Show the user the failing tests with their output. Don't keep going, and
@@ -127,9 +144,9 @@ exit status, pass/fail counts):
 
 | Command | Stage |
 |---|---|
-| `just e2e` | driver |
+| `just e2e` | acceptance |
 | `just boundary` | validation |
-| `just verify` | lint, build, unit |
+| `just verify` | lint, build, unit/integration (the TDD tests) |
 
 All three must pass. Then check by hand and record what you found:
 
@@ -137,6 +154,8 @@ All three must pass. Then check by hand and record what you found:
 - [ ] Each E2E test really exercises its scenario: the same Given/When/Then,
       through the public entry point, with a real DB. It isn't weakened by
       looser assertions, skips, extra stubbing or a different entry point.
+- [ ] New behaviour has the unit/integration tests TDD produced. E2E
+      coverage alone doesn't count.
 - [ ] Every boundary the diff touches has a boundary test that checks the
       exact request (method, path, headers, body).
 - [ ] No production credentials appear in tests, tapes or config.
