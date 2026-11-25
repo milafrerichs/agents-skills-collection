@@ -58,7 +58,21 @@ The `e2e-writer` agent isn't built yet, so the run emulates it.
 2. **The author writes one E2E test per scenario** and commits them by
    themselves, with no other changes. Test-only support files the tests need
    (scenario fixtures, test setup data) may go in the same commit. Every file
-   in that commit counts as an **E2E test file** from then on.
+   in that commit counts as an **E2E test file** from then on, except stub
+   fakes (below).
+
+   **Stub fakes.** A scenario may use an external service that has no fake
+   on the base yet. Without one, its test would fail on setup, not on an
+   assertion. In that case only, the author may add a **stub fake**: the
+   smallest test-only stand-in that lets the test reach its assertion. It
+   holds canned responses for the scenario and has no real logic. The author:
+   - puts it in the red-proof commit;
+   - lists it separately as a stub fake on the record;
+   - says in a comment at the top of the file which boundary it stands in
+     for.
+
+   The stub can't replace an existing fake. If a fake exists but lacks
+   behaviour the scenario needs, raise a `TEST_DISPUTE`.
 3. **Red proof.** Run `just e2e` at that commit and read every test's
    failure:
    - Each scenario test must **fail on an assertion**, meaning the behaviour is
@@ -79,7 +93,11 @@ The `e2e-writer` agent isn't built yet, so the run emulates it.
 4. **Ownership.**
    - The implementer must not edit, delete, rename, skip or weaken any E2E
      test file.
-   - The test author touches nothing except E2E test files.
+   - The test author touches nothing except E2E test files and stub fakes.
+   - The implementer owns stub fakes after the red proof. It may grow a stub
+     into a real fake only test-first, through that boundary's boundary test
+     (see below). The scenario's canned responses must stay true, or be
+     corrected with evidence from the sandbox or tape.
 
 ### TEST_DISPUTE
 
@@ -128,7 +146,10 @@ asking first.
 - Build every boundary the diff touches test-first as well: write its boundary
   test (exact method, path, headers, body), then the client code. Use the same
   fakes and tapes the E2E tests use. If a fake has to change, its boundary
-  test must prove the new behaviour matches the sandbox or tape.
+  test must prove the new behaviour matches the sandbox or tape. This
+  includes turning a stub fake into a real one: write the boundary test
+  first, then the fake. Never change a stub's responses just to make an E2E
+  test pass.
 - After each fix round, count the failing tests across `just e2e`,
   `just boundary` and the unit/integration suite, and log the count
   (`add_note`).
@@ -150,7 +171,11 @@ exit status, pass/fail counts):
 
 All three must pass. Then check by hand and record what you found:
 
-- [ ] `git diff "$RED_PROOF_SHA"..HEAD -- <E2E test files>` is empty.
+- [ ] `git diff "$RED_PROOF_SHA"..HEAD -- <E2E test files>` is empty. Stub
+      fakes are excluded from this check.
+- [ ] Every stub fake has become a real fake backed by a boundary test. Its
+      diff since the red proof changes no scenario response without evidence
+      from the sandbox or tape.
 - [ ] Each E2E test really exercises its scenario: the same Given/When/Then,
       through the public entry point, with a real DB. It isn't weakened by
       looser assertions, skips, extra stubbing or a different entry point.

@@ -149,12 +149,17 @@ details:
    user's confirmation.
 2. Spawn a **fresh** test-author subagent (never a fork) that sees only the
    spec and the repo at `BASE_SHA`, never the plan. It writes one E2E test per
-   scenario, named by scenario id, and commits them by themselves.
+   scenario, named by scenario id, and commits them by themselves. If a
+   scenario uses an external service that has no fake on the base, the
+   author may add a minimal **stub fake** in the same commit, so the test
+   fails on its assertion instead of on setup.
 3. Run `just e2e`. Every scenario test must fail on an assertion, not on a
    setup error. Record `RED_PROOF_SHA`, the E2E test file list and each
    failure line on the execution.
 
-From here on, the implementer never edits those files. If one looks wrong,
+From here on, the implementer never edits the E2E test files. It takes
+over stub fakes and turns each into a real fake test-first, through that
+boundary's boundary test. If one looks wrong,
 raise a `TEST_DISPUTE` with evidence and stop. The author may revise it once.
 
 ### 5. Plan + plan review
@@ -219,7 +224,8 @@ On the final SHA, run each of these and report its result separately:
 `just e2e` (acceptance), `just boundary` (validation) and `just verify` (lint,
 build, unit). All three must pass. Then do the hand checks in
 [references/e2e-contract.md](references/e2e-contract.md#verify-g3):
-- `git diff "$RED_PROOF_SHA"..HEAD -- <E2E test files>` is empty;
+- `git diff "$RED_PROOF_SHA"..HEAD -- <E2E test files>` is empty (stub fakes
+  are excluded, but each must now be backed by a boundary test);
 - each E2E test still exercises its full scenario;
 - new behaviour has its TDD unit/integration tests;
 - every boundary the diff touches has a boundary test.
