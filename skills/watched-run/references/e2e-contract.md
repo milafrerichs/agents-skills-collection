@@ -26,6 +26,43 @@ implementation stays required.
   so a fake cannot drift away from the real API without a boundary test failing.
 - Use sandbox or test-mode credentials only. Never use production keys, not
   even to record a tape.
+- **Fake only what is external.** Replace third-party APIs, email providers,
+  analytics and similar services. Use the real thing for everything the app
+  owns: its own services, its database, its queues. Any outbound request the
+  test hasn't faked must fail the test, not reach the internet.
+
+## Stack guides
+
+Some stacks have their own rules for where the public entry point is and
+how to fake things. Before writing scenarios or tests, check the repo for
+one of these and follow its guide alongside this contract:
+
+| Repo marker | Guide |
+|---|---|
+| `encore.app` (Encore.ts) | [encore-e2e.md](encore-e2e.md) |
+
+## Writing E2E tests that hold up
+
+These apply to every E2E test, whoever writes it.
+
+- **Assert the outcome, not just the status code.** After the When step,
+  read the state back through another endpoint, or the DB, and check what
+  actually changed. For an external boundary, check what the fake received.
+- **Unique data per test.** Give each test its own random ids or prefixes
+  (e.g. `TEST-${randomUUID()}`), so tests can run in parallel and never
+  collide. Don't rely on cleanup alone. This matters most against shared
+  preview or staging databases.
+- **Poll for async outcomes, never sleep.** For queue, Pub/Sub, job or
+  workflow effects, poll with a timeout (Vitest `expect.poll` / `vi.waitFor`,
+  or the equivalent in the stack).
+- **Test the job, not the schedule.** For a cron or periodic job, invoke the
+  job or task the scheduler would run. Don't wait for the clock.
+- **Cover the unhappy paths at the API boundary.** Where a scenario involves
+  them, test the responses clients actually hit: 401/403, validation errors
+  and not-found.
+- **Keep the layer small.** One test per acceptance scenario and nothing
+  more. Edge cases and variations belong in the TDD unit/integration tests,
+  which are faster and less flaky.
 
 ## Scenarios
 
@@ -50,8 +87,10 @@ The `e2e-writer` agent isn't built yet, so the run emulates it.
      confirmed scenarios;
    - the repo at the base commit, which is the run's branch before any
      implementation;
-   - this section's rules, plus the names of the existing fakes and tapes and
-     how the E2E suite is run (`just e2e`).
+   - this section's rules, "Writing E2E tests that hold up", and the
+     repo's stack guide if there is one (e.g. [encore-e2e.md](encore-e2e.md));
+   - the names of the existing fakes and tapes, and how the E2E suite is run
+     (`just e2e`).
 
    It never gets the plan, the plan review or any implementation notes. Tell
    it not to read the execution record.

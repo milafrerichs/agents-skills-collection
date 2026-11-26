@@ -148,7 +148,9 @@ details:
    to the FRs it covers). If the ticket has none, derive them and get the
    user's confirmation.
 2. Spawn a **fresh** test-author subagent (never a fork) that sees only the
-   spec and the repo at `BASE_SHA`, never the plan. It writes one E2E test per
+   spec and the repo at `BASE_SHA`, never the plan. Also give it the
+   contract's test-writing rules and the repo's stack guide, e.g.
+   [references/encore-e2e.md](references/encore-e2e.md) for an Encore repo. It writes one E2E test per
    scenario, named by scenario id, and commits them by themselves. If a
    scenario uses an external service that has no fake on the base, the
    author may add a minimal **stub fake** in the same commit, so the test
