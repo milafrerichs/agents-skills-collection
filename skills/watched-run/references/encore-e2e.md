@@ -49,11 +49,15 @@ describe("coupons", () => {
   - Pub/Sub and other Encore infrastructure.
 - **Faked:** external dependencies only, such as Lemlist, LeadMagic, email
   providers and PostHog.
-- **How to fake an external API:** at the HTTP boundary, with a fake that
-  intercepts `fetch` or a tape. Don't `vi.mock` the client module. Mocking the
-  module skips the app's own client code, which is exactly what the boundary
-  test has to check. The E2E tests and the boundary test share the same fake
-  (see the contract).
+- **How to fake an external API:** in boundary and E2E tests, fake it at the
+  HTTP boundary: a fake that intercepts `fetch` (e.g. msw), fed by a tape.
+  Don't `vi.mock` the client module there. Mocking the module skips the app's
+  own client code, which is exactly what the boundary test has to check. In
+  inner TDD tests, `vi.mock` of the client module is fine once the boundary
+  has a tape-backed boundary test. See "How external services are faked" and
+  "Known boundaries" in the contract. Lemlist has no sandbox; a dedicated test
+  account is planned, so check its status before writing a Lemlist boundary
+  test.
 - **Unexpected requests:** any outbound request the test hasn't faked must
   fail the test. In the TECH-1775 test spin, pipeliner's PostHog client made
   a real request during a test.

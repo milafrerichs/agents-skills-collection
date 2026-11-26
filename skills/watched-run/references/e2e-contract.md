@@ -31,6 +31,32 @@ implementation stays required.
   owns: its own services, its database, its queues. Any outbound request the
   test hasn't faked must fail the test, not reach the internet.
 
+## How external services are faked
+
+Each layer has its own rule. Where the responses come from matters as much
+as where the fake sits: a hand-written fake can be just as wrong as a mock.
+
+| Layer | How the external service is replaced |
+|---|---|
+| **Boundary test** (one per external API) | The app's real client code runs. Interception happens at the HTTP level (`fetch`/HTTP client), and the test asserts the exact request: method, path, query, headers, body. Responses come from **tapes recorded against a sandbox or test account**, including the error responses the code depends on (e.g. duplicate or conflict errors). |
+| **E2E scenario test** | The same HTTP-level fake, fed by the same tapes. Never mock a client module or any other part of the app. |
+| **TDD unit/integration test** | Mocking the client module (e.g. `vi.mock`) is fine for business logic, as long as that boundary has the tape-backed boundary test above. |
+
+**No sandbox or test account yet.** Use a hand-written fake built from the
+provider's API docs. Every canned response a scenario depends on, error
+responses included, must cite its source: a docs page or a recording. List
+any behaviour the docs don't confirm as a known gap in the boundary test.
+Replace the fake with recorded tapes once a test account exists.
+
+### Known boundaries
+
+Check this table before writing a boundary test. When the status of a
+boundary changes, update it here.
+
+| Service | Sandbox / test mode | Status | What to do now |
+|---|---|---|---|
+| Lemlist | None. Lemlist has no sandbox or test mode. | A dedicated test Lemlist account is **planned** for sandbox testing and recording tapes. | First check whether the test account exists; ask the user if unsure. Until it does, use a docs-based hand-written fake as described above, and never record against the production account. Document the duplicate rejection (`LEAD_ALREADY_IN_CAMPAIGN`) and the lead-lookup responses. |
+
 ## Stack guides
 
 Some stacks have their own rules for where the public entry point is and
