@@ -2,8 +2,9 @@
 name: watched-run
 description: >
   Default workflow for real implementation work in a watched (human-present)
-  local session: ticket, plan and critical plan review, TDD, early CodeRabbit
-  CLI review, independent Codex/Claude CLI reviews, hunk-anchored Night Shift
+  local session: ticket, baseline, red-proof E2E tests from a separate test
+  author, scenario-based plan and critical plan review, TDD implementation,
+  E2E + boundary-test verification, early CodeRabbit CLI review, independent Codex/Claude CLI reviews, hunk-anchored Night Shift
   MCP records, PR, and CI/review iteration. Trigger on build, implement, fix,
   add, or change-functionality requests and explicit watched-run invocations.
   Exclude standalone scripts and throwaway utilities not meant to ship as
@@ -16,7 +17,13 @@ description: >
 # Watched Run
 
 A watched (human-present) single-ticket development session. Ticket content
-comes from Linear directly. Start CodeRabbit CLI review during implementation;
+comes from Linear directly. Testing follows
+[references/e2e-contract.md](references/e2e-contract.md). E2E acceptance
+scenarios define the work, organise the plan and verify the result. They are
+written and committed by a separate test author before implementation, one
+test per scenario. Implementation itself is TDD (red -> green -> refactor with
+unit/integration tests). Boundary tests validate every external boundary. That contract wins over anything below or in AGENTS.md that
+conflicts with it. Start CodeRabbit CLI review during implementation;
 require independent Codex and Claude CLI reviews before shipping (skip Claude
 when Claude is the producer), then follow CI + CodeRabbit on the PR.
 The Night Shift MCP is used only in its **record-only** mode
@@ -47,18 +54,23 @@ opt-in. Concretely:
 1. TICKET    - Linear:get_issue(id) -> title, description, acceptance criteria, labels
 2. RECORD    - create_execution(linear_issue_id) -> execution_id (record-only, never queued)
                -> get_issue_spec -> FR/NFR snapshot (derive_requirements if the ticket has none)
-3. PLAN      - write implementation plan; store_artifact; critical subagent review (GO/NO-GO)
-4. IMPLEMENT - TDD: red -> green -> refactor; start CodeRabbit CLI on the first coherent diff
-5. VERIFY    - run tests/lint; confirm every FR/NFR is actually met
-               -> record_requirement_status per id as it is verified
-6. REVIEW    - self-review; store_review_report with hunk-annotated explanations;
+3. BASELINE  - branch at base; just e2e / just boundary / just verify all pass on the base
+4. E2E RED   - scenarios confirmed; separate test author (spec + base only, never the plan)
+               commits one E2E test per scenario; each fails on an assertion -> RED_PROOF_SHA
+5. PLAN      - write implementation plan; store_artifact; critical subagent review (GO/NO-GO)
+6. IMPLEMENT - TDD per plan step (red -> green -> refactor) toward the red E2E scenarios;
+               boundary test per touched boundary; never edit E2E files; fix loop stops
+               after 2 rounds without fewer failures; CodeRabbit on first diff
+7. VERIFY G3 - just e2e / just boundary / just verify on the final SHA, reported separately;
+               hand checks; record_requirement_status per id as it is verified
+8. REVIEW    - self-review; store_review_report with hunk-annotated explanations;
                CodeRabbit + Codex + Claude CLI reviews (Claude skipped if producer)
                -> store_critic_report with attributed, risk-flagged annotations
-7. SHIP      - commit, push, open a PR; complete_execution (record only, not a queue exit)
+9. SHIP      - commit, push, open a PR; complete_execution (record only, not a queue exit)
                -> check requirement_gaps
-8. CI/REVIEW - wait for CI + CodeRabbit; address every comment (add_review_comment
+10. CI/REVIEW - wait for CI + CodeRabbit; address every comment (add_review_comment
                type:"explain" for anything non-obvious you touch); repeat until green
-9. REPORT    - summarize what changed, link the PR + execution record, note open items
+11. REPORT   - summarize what changed, link the PR + execution record, note open items
 ```
 
 ### 1. Get the ticket
@@ -91,7 +103,7 @@ Night Shift MCP -> get_issue_spec
 
 `functional_requirements` / `non_functional_requirements` (each `{id, text}`)
 are the requirements contract for the run and the only ids
-`record_requirement_status` (step 5) accepts. They are a snapshot, not the
+`record_requirement_status` (step 7) accepts. They are a snapshot, not the
 live ticket: if `spec_drift` lists added / removed / reworded ids, keep working
 against the snapshot, tell the user, and mention the drift in the review
 report's `outro`. Use ids exactly as returned (unnumbered bullets get `FR-U1`
@@ -113,11 +125,57 @@ They are stored as `agent_derived` with ids `FR-U1…` / `NFR-U1…`; re-call
 `get_issue_spec` to pick them up. The server rejects this when the ticket has
 its own requirements — never use it to replace or extend those.
 
-### 3. Plan + plan review
+### 3. Baseline
+
+Create the branch at the PR target (base) before anything else. No worktree is
+needed for a watched local run:
+```bash
+git checkout -b <type>/<slug>   # e.g. feat/user-search-endpoint
+BASE_SHA=$(git rev-parse HEAD)
+```
+On the base, run `just e2e`, `just boundary` and `just verify` and record each
+result separately (`add_note`). All three must pass. If one fails, stop and
+report it. If the `e2e` or `boundary` recipe is missing, ask the user before
+adding it (Justfiles are tier 2). See
+[references/e2e-contract.md](references/e2e-contract.md#baseline-before-work-starts).
+
+### 4. E2E red proof (separate test author)
+
+Follow [references/e2e-contract.md](references/e2e-contract.md) for the
+details:
+
+1. Confirm the acceptance scenarios (Given/When/Then, with ids, each mapped
+   to the FRs it covers). If the ticket has none, derive them and get the
+   user's confirmation.
+2. Spawn a **fresh** test-author subagent (never a fork) that sees only the
+   spec and the repo at `BASE_SHA`, never the plan. Also give it the
+   contract's test-writing rules and the repo's stack guide, e.g.
+   [references/encore-e2e.md](references/encore-e2e.md) for an Encore repo. It writes one E2E test per
+   scenario, named by scenario id, and commits them by themselves. If a
+   scenario uses an external service that has no fake on the base, the
+   author may add a minimal **stub fake** in the same commit, so the test
+   fails on its assertion instead of on setup.
+3. Run `just e2e`. Every scenario test must fail on an assertion, not on a
+   setup error. Record `RED_PROOF_SHA`, the E2E test file list and each
+   failure line on the execution.
+
+From here on, the implementer never edits the E2E test files. It takes
+over stub fakes and turns each into a real fake test-first, through that
+boundary's boundary test. If one looks wrong,
+raise a `TEST_DISPUTE` with evidence and stop. The author may revise it once.
+
+### 5. Plan + plan review
+
+Organise the plan around the acceptance scenarios: each step names the
+scenario(s) it moves toward green.
 
 Cover: 1. Goal · 2. Affected files · 3. Data/type changes · 4. Test strategy
-(TDD) · 5. Implementation steps · 6. Edge cases & risks · 7. Out of scope ·
-8. Requirements coverage (every ticket FR/NFR -> implementation step and verification evidence).
+(which red-proof E2E scenario each step moves forward; the TDD unit/integration
+tests each step starts with; the boundaries the change touches and the
+boundary test, fake or tape for each) ·
+5. Implementation steps · 6. Edge cases & risks · 7. Out of scope ·
+8. Requirements coverage (every FR -> scenario id -> E2E test; every NFR ->
+implementation step and `tested` / `demonstrated` evidence).
 Do not mark a ticket requirement out of scope without an explicit scope change
 from the user.
 
@@ -134,30 +192,54 @@ Spawn a critical review subagent before writing code (default model: Opus;
 use whichever the user has indicated otherwise). Prompt: "You are a senior
 engineer doing a pre-implementation plan review. Be critical. Flag vague
 steps, missing edge cases, incorrect file assumptions, anything likely to
-break during TDD. End with GO / NO-GO and required changes if NO-GO."
+break while turning the E2E tests green, and boundaries touched without a
+boundary test. End with GO / NO-GO and required changes if NO-GO."
 
 GO -> proceed. NO-GO -> revise once, re-store, re-review. Still NO-GO -> stop
 and flag to the user.
 
-### 4. Implement (TDD)
+### 6. Implement (TDD)
 
 Read [references/cli-reviews.md](references/cli-reviews.md) and check the
 required CLIs before implementing. Start CodeRabbit CLI as soon as the first
 coherent implementation diff exists; collect findings while continuing work.
 Do not defer it until verification, push, or PR creation.
 
-Red -> Green -> Refactor per plan step, on a normal feature branch (no
-worktree needed for a watched local run):
-```bash
-git checkout -b <type>/<slug>   # e.g. feat/user-search-endpoint
-```
+Work through the plan step by step on the branch from step 3. Use TDD:
+red -> green -> refactor with unit/integration tests for each step. The
+red-proof E2E scenarios are the outer target. Run `just e2e` after each step
+to see which scenarios now pass, but don't use them instead of the inner
+tests.
 
-### 5. Verify
+- Build each external boundary the diff touches (third-party API, DB, queue,
+  storage) test-first too. Its boundary test checks the exact request against
+  a sandbox, fake or tape. The E2E tests use those same fakes and tapes.
+- Use sandbox or test-mode credentials only.
+- Never edit, skip or weaken an E2E test file. Raise `TEST_DISPUTE` instead.
+- **Fix loop:** after each round, log the number of failing tests. Keep going
+  while it drops. After two rounds in a row without a drop, or when the
+  wall-clock budget runs out, stop and show the user the failures.
 
-Run the repo's actual test/lint commands (see root CLAUDE.md / AGENTS.md).
-When a ticket is associated with the work, verify every functional requirement
-(FR) and non-functional requirement (NFR) from that ticket against concrete
-evidence. Fix anything unmet; if a requirement cannot be met or verified, report
+### 7. Verify (G3)
+
+On the final SHA, run each of these and report its result separately:
+`just e2e` (acceptance), `just boundary` (validation) and `just verify` (lint,
+build, unit). All three must pass. Then do the hand checks in
+[references/e2e-contract.md](references/e2e-contract.md#verify-g3):
+- `git diff "$RED_PROOF_SHA"..HEAD -- <E2E test files>` is empty (stub fakes
+  are excluded, but each must now be backed by a boundary test);
+- each E2E test still exercises its full scenario;
+- new behaviour has its TDD unit/integration tests;
+- every boundary the diff touches has a boundary test.
+
+Store the three outputs and the hand-check results with `store_artifact`
+(`artifact_type: "summary_notes"`).
+
+Verify every functional requirement (FR) and non-functional requirement (NFR)
+from the ticket against concrete evidence. **Done means** every FR is covered
+by a passing E2E test, and every NFR has `tested` or `demonstrated` evidence.
+An NFR that rests only on `asserted` evidence (code reading or a manual claim)
+is recorded as `partial` and listed for the user. Fix anything unmet; if a requirement cannot be met or verified, report
 the blocker and do not ship or mark the work complete.
 
 Record each requirement on the execution **as you verify it** — one call per
@@ -178,8 +260,10 @@ Night Shift MCP -> record_requirement_status
 ```
 
 - `anchors` point at where the code satisfies it (new-file line ranges);
-  `evidence` is what proves it — prefer a test, then a command, then a code
-  ref; `manual` only when nothing automatable exists.
+  `evidence` is what proves it. For an FR, use the passing E2E test
+  (`kind: test`, `ref: "<scenario id>: <test name>"`). For an NFR, put the
+  evidence level in `note`: `tested` = `test`, `demonstrated` = `command`,
+  `asserted` = `code` / `manual`.
 - Record `partial` / `unmet` / `not_verifiable` honestly before fixing or
   reporting the blocker — not instead of it.
 - `descoped` needs human approval and counts as a gap until given; use it only
@@ -190,12 +274,12 @@ Night Shift MCP -> record_requirement_status
   unrecorded is marked `missing`.
 
 Also list the FR/NFR strings in the review report's `requirements` field
-(step 6). Once every id is recorded `met`, explicitly note: "All functional
+(step 8). Once every id is recorded `met`, explicitly note: "All functional
 and non-functional requirements of <ticket ID> are met." Include this
 confirmation in the PR description and final report, and recheck it after
 review fixes.
 
-### 6. Review — self and independent CLI reviews, all hunk-anchored
+### 8. Review — self and independent CLI reviews, all hunk-anchored
 
 This is where "what does this code do, what are the risk factors, explain
 the critical pieces" gets captured — in the execution's review record,
@@ -241,9 +325,10 @@ Night Shift MCP -> store_critic_report
 `severity` + `rationale` is the risk-factor callout — concrete, not vague.
 Empty `files: []` is a valid, honest clean review.
 
-### 7. Ship
+### 9. Ship
 
-Ship only after every ticket FR/NFR is verified as met, the confirmation is
+Ship only after G3 passes on the final SHA (all three commands plus the hand
+checks), every ticket FR/NFR is verified as met, the confirmation is
 recorded, the required CLI reviews complete, and actionable findings are
 resolved. If the commit below changes the reviewed candidate, repeat the
 final reviews before pushing.
@@ -260,7 +345,10 @@ gh pr create --title "<TECH-123> <title>" --body "$(cat <<'EOF'
 TECH-123
 
 ## Test plan
-<how you verified>
+- Red proof: <RED_PROOF_SHA> (E2E tests, one per scenario, failing on base)
+- just e2e: <result> · just boundary: <result> · just verify: <result>
+- Boundaries touched -> boundary tests: <list>
+- Resting on `asserted`: <list or "none">
 EOF
 )"
 ```
@@ -284,7 +372,7 @@ ships once every requirement is met, it should be empty. A `missing` id means
 a `record_requirement_status` call was skipped: record it now. Report any
 remaining gap to the user rather than leaving it for the dashboard to surface.
 
-### 8. Wait for CI + CodeRabbit, then address comments
+### 10. Wait for CI + CodeRabbit, then address comments
 
 ```bash
 gh pr checks <PR-number> --watch
@@ -304,14 +392,18 @@ Night Shift MCP -> add_review_comment
   body:         "<why this change / what it protects against>"
 ```
 Commit naming the comment it resolves, re-run `record_requirement_status`
-for any requirement whose status or evidence the fix changed, repeat the
-final CLI reviews on the new candidate before pushing, push (no force-push), re-run
+for any requirement whose status or evidence the fix changed, re-run G3 (the
+three commands and the E2E-diff check), repeat the final CLI reviews on the new candidate before pushing, push (no force-push), re-run
 `gh pr checks --watch`; loop until green or nothing addressable without a
-human decision. Stale/ambiguous comments: say so, don't guess.
+human decision. Stale/ambiguous comments: say so, don't guess. A comment
+asking to change an E2E test is a `TEST_DISPUTE`: take it to the user, don't
+edit the test.
 
-### 9. Report
+### 11. Report
 
-What was built, PR link, CI status, comments addressed, requirements tally
+What was built, PR link, CI status, `RED_PROOF_SHA`, the separate
+`just e2e` / `just boundary` / `just verify` results (baseline and final),
+anything resting on `asserted`, any `TEST_DISPUTE`, comments addressed, requirements tally
 (`<X>/<Y> FR, <A>/<B> NFR met`, source ticket or agent_derived, any
 `requirement_gaps`), CLI reviewer statuses
 (and any Claude-producer exception), pointer to the
@@ -328,3 +420,7 @@ execution record (plan + review + critic findings), anything left open.
 | Run destructive DB migrations |
 | Expand a review comment into unrequested scope |
 | Call `claim_execution` / `get_queue` for this record (it must stay unqueued) |
+| Edit, skip or weaken an E2E test file after the red proof (raise `TEST_DISPUTE`) |
+| Show the plan to the E2E test author, or let it touch non-test files |
+| Use production keys or credentials in tests, tapes or fakes |
+| Add or change a Justfile recipe without asking (tier 2) |

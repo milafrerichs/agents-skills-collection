@@ -8,7 +8,7 @@
   "plugins": [
     {
       "name": "watched-run",
-      "description": "Default workflow for human-present implementation work: Linear ticket, reviewed plan, TDD, CodeRabbit/Codex/Claude CLI reviews, Night Shift MCP record-only execution, PR and CI iteration.",
+      "description": "Default workflow for human-present implementation work: Linear ticket, red-proof E2E tests from a separate test author, scenario-based plan, TDD implementation, E2E and boundary-test verification, CodeRabbit/Codex/Claude CLI reviews, Night Shift MCP record-only execution, PR and CI iteration.",
       "source": "./skills/watched-run",
       "strict": false,
       "skills": ["./"],
